@@ -1723,6 +1723,8 @@ _PyEval_EvalFrameDefault(PyThreadState *tstate, _PyInterpreterFrame *frame, int 
         */ \
     frame->stacktop = -1;
 
+    frame->lazy_imports = -1;
+
     int lazy_imports = -1;
     if (GLOBALS() == LOCALS() && PyDict_CheckExact(GLOBALS())) {
         PyObject *modname  = _PyDict_GetItemWithError(GLOBALS(), &_Py_ID(__name__));
