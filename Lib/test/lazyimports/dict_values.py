@@ -1,4 +1,6 @@
-# Test the lazy imports objects are not exposed when checking the values of dictionaries
+"""
+Test the lazy imports objects are not exposed when checking the values of dictionaries
+"""
 import self
 import importlib
 from test.lazyimports.customized_modules import module

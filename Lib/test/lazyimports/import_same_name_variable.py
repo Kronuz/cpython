@@ -1,8 +1,9 @@
+"""
+Test the behavior when a module has a sub-module and a variable with the same namings
+Different import/define orderings will expect different results
+"""
 import self
 import sys
-
-# Test the behavior when a module has a sub-module and a variable with the same namings
-# Different import/define orderings will expect different results
 
 from test.lazyimports.customized_modules import module_same_name_var_order1
 self.assertEqual(module_same_name_var_order1.bar, "Blah")

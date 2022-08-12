@@ -1,3 +1,6 @@
+"""
+Test `importlib.is_lazy_imports_enabled`
+"""
 import self
 import _imp
 import importlib

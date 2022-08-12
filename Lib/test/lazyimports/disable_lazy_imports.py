@@ -1,3 +1,6 @@
+"""
+Test disabling lazy imports by using `importlib.set_lazy_imports(False)`
+"""
 import self
 if not self._lazy_imports:
     self.skipTest("Test relevant only when running with lazy imports enabled")
