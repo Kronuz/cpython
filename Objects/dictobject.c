@@ -2987,7 +2987,7 @@ PyDict_ResolveLazyImports(PyObject *dict)
 top:
     version_tag = mp->ma_version_tag;
 
-    /* try importing as many deferredd objects as possible */
+    /* try importing as many lazy import objects as possible */
     v = dict_lazy_items_only(mp);
     if (v == NULL) {
         return -1;
