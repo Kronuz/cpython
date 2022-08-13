@@ -3105,7 +3105,7 @@ handle_eval_breaker:
             uint32_t version = read_u32(cache->module_keys_version);
             DEOPT_IF(dict->ma_keys->dk_version != version, LOAD_GLOBAL);
             assert(DK_IS_UNICODE(dict->ma_keys));
-            PyDictUnicodeEntry *ep = DK_UNICODE_ENTRIES(dict->ma_keys) + cache->index;
+            PyDictUnicodeEntry *ep = &DK_UNICODE_ENTRIES(dict->ma_keys)[cache->index];
             PyObject *res = ep->me_value;
             DEOPT_IF(res == NULL, LOAD_GLOBAL);
             if (PyLazyImport_CheckExact(res)) {
@@ -3141,7 +3141,7 @@ handle_eval_breaker:
             DEOPT_IF(mdict->ma_keys->dk_version != mod_version, LOAD_GLOBAL);
             DEOPT_IF(bdict->ma_keys->dk_version != bltn_version, LOAD_GLOBAL);
             assert(DK_IS_UNICODE(bdict->ma_keys));
-            PyDictUnicodeEntry *ep = DK_UNICODE_ENTRIES(bdict->ma_keys) + cache->index;
+            PyDictUnicodeEntry *ep = &DK_UNICODE_ENTRIES(bdict->ma_keys)[cache->index];
             PyObject *res = ep->me_value;
             DEOPT_IF(res == NULL, LOAD_GLOBAL);
             if (PyLazyImport_CheckExact(res)) {
@@ -3617,7 +3617,7 @@ handle_eval_breaker:
                 LOAD_ATTR);
             assert(dict->ma_keys->dk_kind == DICT_KEYS_UNICODE);
             assert(cache->index < dict->ma_keys->dk_nentries);
-            PyDictUnicodeEntry *ep = DK_UNICODE_ENTRIES(dict->ma_keys) + cache->index;
+            PyDictUnicodeEntry *ep = &DK_UNICODE_ENTRIES(dict->ma_keys)[cache->index];
             res = ep->me_value;
             DEOPT_IF(res == NULL, LOAD_ATTR);
             if (PyLazyImport_CheckExact(res)) {
