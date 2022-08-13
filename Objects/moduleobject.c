@@ -641,6 +641,7 @@ _PyModule_ClearDict(PyObject *d)
     /* Note: we leave __builtins__ in place, so that destructors
        of non-global objects defined in this module can still use
        builtins, in particularly 'None'. */
+
 }
 
 /*[clinic input]
