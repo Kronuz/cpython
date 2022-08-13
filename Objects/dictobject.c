@@ -1184,12 +1184,12 @@ int
 _PyDict_HasOnlyStringKeys(PyObject *dict)
 {
     Py_ssize_t pos = 0;
-    PyObject *key, *value;
+    PyObject *key;
     assert(PyDict_Check(dict));
     /* Shortcut */
     if (((PyDictObject *)dict)->ma_keys->dk_kind != DICT_KEYS_GENERAL)
         return 1;
-    while (_PyDict_Next(dict, &pos, &key, &value, NULL, NULL))
+    while (_PyDict_Next(dict, &pos, &key, NULL, NULL, NULL))
         if (!PyUnicode_Check(key))
             return 0;
     return 1;
