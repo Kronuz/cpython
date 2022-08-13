@@ -45,7 +45,7 @@ PyAPI_FUNC(int) _PyDict_DelItemIf(PyObject *mp, PyObject *key,
 PyAPI_FUNC(int) _PyDict_Next(PyObject *mp, Py_ssize_t *pos, PyObject **key, PyObject **value,
                              Py_hash_t *hash, PyObject ***pvalue_ptr);
 
-/* Return 1 if the given dict has deferred objects, or 0 otherwise. */
+/* Return 1 if the given dict has lazy values, or 0 otherwise. */
 PyAPI_FUNC(int) _PyDict_HasLazyImports(PyObject *);
 
 /* Get the number of items of a dictionary. */
