@@ -1,3 +1,6 @@
+"""
+Test the side effects when loading a lazy imports object
+"""
 import self
 
 import test.lazyimports.customized_modules.foo.bar

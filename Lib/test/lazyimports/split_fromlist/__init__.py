@@ -1,3 +1,6 @@
+"""
+Test the behavior when using the syntax `from xxx import ooo`
+"""
 import self
 import sys
 import importlib

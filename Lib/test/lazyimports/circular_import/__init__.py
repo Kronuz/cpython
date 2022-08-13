@@ -1,3 +1,7 @@
+"""
+Test lazy imports when importing a circular import
+This circle occurs on the same level files
+"""
 import self
 import importlib
 

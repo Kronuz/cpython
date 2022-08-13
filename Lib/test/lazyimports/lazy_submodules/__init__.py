@@ -1,3 +1,6 @@
+"""
+Test the status of submodules
+"""
 import self
 import sys
 

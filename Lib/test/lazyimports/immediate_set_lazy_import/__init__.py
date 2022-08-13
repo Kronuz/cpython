@@ -1,3 +1,6 @@
+"""
+Validate the status of imported modules before and after running `importlib.set_lazy_imports`
+"""
 import self
 if not self._lazy_imports:
     self.skipTest("Test relevant only when running with lazy imports enabled")
