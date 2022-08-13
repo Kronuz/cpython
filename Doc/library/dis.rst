@@ -964,7 +964,7 @@ iterations of the loop.
 
 .. opcode:: EAGER_IMPORT_NAME (namei)
 
-   Imports the module ``co_names[namei]`` eagerly.  TOS and TOS1 are popped and
+   Imports the module ``co_names[namei]`` eagerly (i.e. even if lazy imports are enabled, the module is imported immediately.)  TOS and TOS1 are popped and
    provide the *fromlist* and *level* arguments of :func:`__import__`.  The
    module object is pushed onto the stack.  The current namespace is not
    affected: for a proper import statement, a subsequent :opcode:`STORE_FAST`
