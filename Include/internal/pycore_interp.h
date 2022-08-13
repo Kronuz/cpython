@@ -125,7 +125,7 @@ struct _is {
     // importlib module
     PyObject *importlib;
     PyObject *eager_imports;
-    PyObject *lazy_attrubutes;
+    PyObject *lazy_attributes;
     // override for config->use_frozen_modules (for tests)
     // (-1: "off", 1: "on", 0: no override)
     int override_frozen_modules;

@@ -297,7 +297,7 @@ init_interpreter(PyInterpreterState *interp,
 
     interp->lazy_imports = -1;
     interp->eager_imports = NULL;
-    interp->lazy_attrubutes = NULL;
+    interp->lazy_attributes = NULL;
     interp->_initialized = 1;
 }
 
@@ -413,7 +413,7 @@ interpreter_clear(PyInterpreterState *interp, PyThreadState *tstate)
     Py_CLEAR(interp->importlib);
     Py_CLEAR(interp->import_func);
     Py_CLEAR(interp->eager_imports);
-    Py_CLEAR(interp->lazy_attrubutes);
+    Py_CLEAR(interp->lazy_attributes);
     Py_CLEAR(interp->dict);
 #ifdef HAVE_FORK
     Py_CLEAR(interp->before_forkers);
