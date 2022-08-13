@@ -118,7 +118,8 @@ As a consequence of this, split keys have a maximum size of 16.
 #include "pycore_code.h"          // stats
 #include "pycore_dict.h"          // PyDictKeysObject
 #include "pycore_gc.h"            // _PyObject_GC_IS_TRACKED()
-#include "pycore_lazyimport.h"    // PyLazyImport_CheckExact
+#include "pycore_import.h"        // _PyImport_LoadLazyImport
+#include "pycore_lazyimport.h"    // PyLazyImportObject
 #include "pycore_object.h"        // _PyObject_GC_TRACK()
 #include "pycore_pyerrors.h"      // _PyErr_Fetch()
 #include "pycore_pystate.h"       // _PyThreadState_GET()
@@ -1155,7 +1156,7 @@ start:
         value = *value_ptr;
     if (value && PyLazyImport_CheckExact(value)) {
         assert(dk->dk_lazy_imports);
-        PyObject *resolved_value = PyImport_LoadLazyImport(value, 0);
+        PyObject *resolved_value = _PyImport_LoadLazyImport(value, 0);
         if (resolved_value == NULL) {
             *value_addr = NULL;
             if (PyErr_Occurred()) {
@@ -1322,7 +1323,7 @@ verbose_lazy_import(PyObject *value)
                 return;
             }
         }
-        PyObject *name = PyLazyImport_GetName(value);
+        PyObject *name = _PyLazyImport_GetName(value);
         if (name == NULL) {
             PyErr_Clear();
             return;
@@ -1873,7 +1874,7 @@ _PyDict_GetItemHint(PyDictObject *mp, PyObject *key,
             value = *value_ptr;
             if (value && PyLazyImport_CheckExact(value)) {
                 assert(dk->dk_lazy_imports);
-                PyObject *resolved_value = PyImport_LoadLazyImport(value, 0);
+                PyObject *resolved_value = _PyImport_LoadLazyImport(value, 0);
                 if (resolved_value == NULL) {
                     *value_addr = NULL;
                     if (PyErr_Occurred()) {
@@ -1962,7 +1963,7 @@ PyDict_GetItemWithError(PyObject *op, PyObject *key)
 /* Similar to PyDict_GetItemWithError, but it doesn't resolve
  * any lazy import objects. */
 PyObject *
-PyDict_GetItemKeepLazy(PyObject *op, PyObject *key)
+_PyDict_GetItemKeepLazy(PyObject *op, PyObject *key)
 {
     Py_ssize_t ix; (void)ix;
     Py_hash_t hash;
@@ -2995,7 +2996,7 @@ top:
         item = PyList_GET_ITEM(v, i);
         value = PyTuple_GET_ITEM(item, 1);
         assert(PyLazyImport_CheckExact(value));
-        resolved_value = PyImport_LoadLazyImport(value, 0);
+        resolved_value = _PyImport_LoadLazyImport(value, 0);
         if (resolved_value == NULL) {
             if (_PyErr_Occurred(tstate)) {
                 return -1;
@@ -3914,7 +3915,7 @@ dict_popitem_impl(PyDictObject *self)
 
     if (value && PyLazyImport_CheckExact(value)) {
         assert(self->ma_keys->dk_lazy_imports);
-        PyObject *resolved_value = PyImport_LoadLazyImport(value, 0);
+        PyObject *resolved_value = _PyImport_LoadLazyImport(value, 0);
         if (resolved_value == NULL) {
             if (!PyErr_Occurred()) {
                 PyErr_SetString(PyExc_KeyError, "popitem(): Lazy Import cycle");
@@ -4117,7 +4118,7 @@ PyDict_Contains(PyObject *op, PyObject *key)
 int
 PyDict_IsLazyImport(PyObject *mp, PyObject *name)
 {
-    PyObject *value = PyDict_GetItemKeepLazy(mp, name);
+    PyObject *value = _PyDict_GetItemKeepLazy(mp, name);
     if (value == NULL) {
         return -1;
     }

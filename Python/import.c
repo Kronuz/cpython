@@ -1803,12 +1803,12 @@ new_lazy_import(PyObject *parent, PyObject *child, PyObject *globals, PyObject *
     if (PyTuple_SetItem(fromlist, 0, child) < 0) {
         return NULL;
     }
-    PyObject *from = PyLazyImport_NewModule(parent, globals, locals, fromlist, NULL);
+    PyObject *from = _PyLazyImport_NewModule(parent, globals, locals, fromlist, NULL);
     Py_DECREF(fromlist);
     if (from == NULL) {
         return NULL;
     }
-    PyLazyImportObject *lazy_import = (PyLazyImportObject *)PyLazyImport_NewObject(from, child);
+    PyLazyImportObject *lazy_import = (PyLazyImportObject *)_PyLazyImport_NewObject(from, child);
     Py_DECREF(from);
     return lazy_import;
 }
@@ -2006,7 +2006,7 @@ _PyImport_LazyImportName(PyObject *builtins, PyObject *globals, PyObject *locals
         goto error;
     }
     if (lazy) {
-        lazy_module = PyLazyImport_NewModule(abs_name, globals, locals, fromlist, NULL);
+        lazy_module = _PyLazyImport_NewModule(abs_name, globals, locals, fromlist, NULL);
     } else {
         lazy_module = _PyImport_EagerImportName(builtins, globals, locals, name, fromlist, level);
     }
@@ -2154,7 +2154,7 @@ _imp_load_lazy_import_impl(PyLazyImportObject *lazy_import, int deep)
 }
 
 PyObject *
-PyImport_LoadLazyImport(PyObject *lazy_import, int deep)
+_PyImport_LoadLazyImport(PyObject *lazy_import, int deep)
 {
     PyObject *thread_id = NULL;
     assert(lazy_import != NULL);
@@ -3169,13 +3169,13 @@ _imp__maybe_set_submodule_attribute_impl(PyObject *module, PyObject *parent,
             }
             if (PyDict_CheckExact(parent_dict)) {
                 if (lazy_loaded_contains_parent(parent_module, child)) {
-                    PyObject *attr = PyDict_GetItemKeepLazy(parent_dict, child);
+                    PyObject *attr = _PyDict_GetItemKeepLazy(parent_dict, child);
                     if (attr == NULL) {
                         if (PyErr_Occurred()) {
                             goto error;
                         }
                     } else if (PyLazyImport_CheckExact(attr)) {
-                        PyObject *attr_name = PyLazyImport_GetName(attr);
+                        PyObject *attr_name = _PyLazyImport_GetName(attr);
                         if (PyUnicode_Compare(attr_name, name) == 0) {
                             if (PyDict_SetItem(parent_dict, child, child_module) < 0) {
                                 Py_DECREF(attr_name);

@@ -890,6 +890,8 @@
     added = '3.2'
 [function.PyIter_Next]
     added = '3.2'
+[data.PyLazyImport_Type]
+    added = '3.12'
 [data.PyListIter_Type]
     added = '3.2'
 [data.PyListRevIter_Type]

@@ -5,7 +5,7 @@
 #include "pycore_lazyimport.h"
 
 PyObject *
-PyLazyImport_NewModule(
+_PyLazyImport_NewModule(
     PyObject *name, PyObject *globals, PyObject *locals, PyObject *fromlist, PyObject *level)
 {
     PyLazyImportObject *m;
@@ -44,7 +44,7 @@ PyLazyImport_NewModule(
 }
 
 PyObject *
-PyLazyImport_NewObject(PyObject *from, PyObject *name)
+_PyLazyImport_NewObject(PyObject *from, PyObject *name)
 {
     PyLazyImportObject *m;
     if (!from || !PyLazyImport_CheckExact(from) || !name || !PyUnicode_Check(name)) {
@@ -65,7 +65,7 @@ PyLazyImport_NewObject(PyObject *from, PyObject *name)
         if (PyTuple_SetItem(fromlist, 0, name) < 0) {
             return NULL;
         }
-        PyObject *new_from = PyLazyImport_NewModule(
+        PyObject *new_from = _PyLazyImport_NewModule(
             lazy_from->lz_name, lazy_from->lz_globals, lazy_from->lz_locals, fromlist, lazy_from->lz_level);
         Py_DECREF(fromlist);
         if (new_from == NULL) {
@@ -162,7 +162,7 @@ lazy_import_clear(PyLazyImportObject *m)
 }
 
 PyObject *
-PyLazyImport_GetName(PyObject *lazy_import)
+_PyLazyImport_GetName(PyObject *lazy_import)
 {
     assert(PyLazyImport_CheckExact(lazy_import));
     return lazy_import_name((PyLazyImportObject *)lazy_import);

@@ -13,6 +13,7 @@
 #include "pycore_ceval.h"         // _PyEval_SignalAsyncExc()
 #include "pycore_code.h"
 #include "pycore_function.h"
+#include "pycore_import.h"        // _PyImport_EagerImportName
 #include "pycore_initconfig.h"    // _PyStatus_OK()
 #include "pycore_lazyimport.h"    // PyLazyImport_CheckExact()
 #include "pycore_long.h"          // _PyLong_GetZero()
@@ -3110,7 +3111,7 @@ handle_eval_breaker:
             if (PyLazyImport_CheckExact(res)) {
                 assert(dict->ma_keys->dk_lazy_imports);
                 uint64_t version_tag = dict->ma_version_tag;
-                PyObject *resolved = PyImport_LoadLazyImport(res, 0);
+                PyObject *resolved = _PyImport_LoadLazyImport(res, 0);
                 DEOPT_IF(resolved == NULL, LOAD_GLOBAL);
                 DEOPT_IF(dict->ma_version_tag != version_tag, LOAD_GLOBAL);
                 DEOPT_IF(dict->ma_keys->dk_version != version, LOAD_GLOBAL);
@@ -3146,7 +3147,7 @@ handle_eval_breaker:
             if (PyLazyImport_CheckExact(res)) {
                 assert(bdict->ma_keys->dk_lazy_imports);
                 uint64_t version_tag = bdict->ma_version_tag;
-                PyObject *resolved = PyImport_LoadLazyImport(res, 0);
+                PyObject *resolved = _PyImport_LoadLazyImport(res, 0);
                 DEOPT_IF(resolved == NULL, LOAD_GLOBAL);
                 DEOPT_IF(bdict->ma_version_tag != version_tag, LOAD_GLOBAL);
                 DEOPT_IF(mdict->ma_keys->dk_version != mod_version, LOAD_GLOBAL);
@@ -3622,7 +3623,7 @@ handle_eval_breaker:
             if (PyLazyImport_CheckExact(res)) {
                 assert(dict->ma_keys->dk_lazy_imports);
                 uint64_t version_tag = dict->ma_version_tag;
-                PyObject *resolved = PyImport_LoadLazyImport(res, 0);
+                PyObject *resolved = _PyImport_LoadLazyImport(res, 0);
                 DEOPT_IF(resolved == NULL, LOAD_ATTR);
                 DEOPT_IF(dict->ma_version_tag != version_tag, LOAD_ATTR);
                 DEOPT_IF(dict->ma_keys->dk_version != read_u32(cache->version),
@@ -3667,7 +3668,7 @@ handle_eval_breaker:
                 if (PyLazyImport_CheckExact(res)) {
                     assert(dict->ma_keys->dk_lazy_imports);
                     uint64_t version_tag = dict->ma_version_tag;
-                    PyObject *resolved = PyImport_LoadLazyImport(res, 0);
+                    PyObject *resolved = _PyImport_LoadLazyImport(res, 0);
                     DEOPT_IF(resolved == NULL, LOAD_ATTR);
                     DEOPT_IF(dict->ma_version_tag != version_tag, LOAD_ATTR);
                     Py_DECREF(res);
@@ -3683,7 +3684,7 @@ handle_eval_breaker:
                 if (PyLazyImport_CheckExact(res)) {
                     assert(dict->ma_keys->dk_lazy_imports);
                     uint64_t version_tag = dict->ma_version_tag;
-                    PyObject *resolved = PyImport_LoadLazyImport(res, 0);
+                    PyObject *resolved = _PyImport_LoadLazyImport(res, 0);
                     DEOPT_IF(resolved == NULL, LOAD_ATTR);
                     DEOPT_IF(dict->ma_version_tag != version_tag, LOAD_ATTR);
                     Py_DECREF(res);
@@ -4185,7 +4186,7 @@ handle_eval_breaker:
             int err;
 
             if (PyLazyImport_CheckExact(from)) {
-                PyObject *mod = PyImport_LoadLazyImport(from, 1);
+                PyObject *mod = _PyImport_LoadLazyImport(from, 1);
                 Py_DECREF(from);
                 if (mod == NULL) {
                     if (!_PyErr_Occurred(tstate)) {
@@ -4222,7 +4223,7 @@ handle_eval_breaker:
             PyObject *from = TOP();
             PyObject *res;
             if (PyLazyImport_CheckExact(from))
-                res = PyLazyImport_NewObject(from, name);
+                res = _PyLazyImport_NewObject(from, name);
             else
                 res = _PyImport_ImportFrom(tstate, from, name);
             PUSH(res);
@@ -7614,7 +7615,7 @@ import_all_from(PyThreadState *tstate, PyObject *locals, PyObject *v)
             }
         }
         if (PyDict_CheckExact(locals) && dict != NULL && PyDict_CheckExact(dict)) {
-            value = PyDict_GetItemKeepLazy(dict, name);
+            value = _PyDict_GetItemKeepLazy(dict, name);
             if (value != NULL) {
                 Py_XINCREF(value);
             } else if (!_PyErr_Occurred(tstate)) {

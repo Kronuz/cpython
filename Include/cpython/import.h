@@ -24,31 +24,6 @@ PyAPI_FUNC(int) _PyImport_FixupExtensionObject(PyObject*, PyObject *,
 
 PyAPI_FUNC(int) _PyImport_IsLazyImportsEnabled(PyThreadState *tstate);
 
-PyAPI_FUNC(PyObject *) PyImport_LoadLazyImport(
-    PyObject *lazy_object,
-    int deep);
-
-PyAPI_FUNC(PyObject *) _PyImport_LazyImportName(
-    PyObject *builtins,
-    PyObject *globals,
-    PyObject *locals,
-    PyObject *name,
-    PyObject *fromlist,
-    PyObject *level);
-
-PyAPI_FUNC(PyObject *) _PyImport_EagerImportName(
-    PyObject *builtins,
-    PyObject *globals,
-    PyObject *locals,
-    PyObject *name,
-    PyObject *fromlist,
-    PyObject *level);
-
-PyAPI_FUNC(PyObject *) _PyImport_ImportFrom(
-    PyThreadState *tstate,
-    PyObject *v,
-    PyObject *name);
-
 struct _inittab {
     const char *name;           /* ASCII encoded string */
     PyObject* (*initfunc)(void);

@@ -9,11 +9,6 @@ extern "C" {
 #endif
 
 
-PyAPI_DATA(PyTypeObject) PyLazyImport_Type;
-
-#define PyLazyImport_CheckExact(op) Py_IS_TYPE((op), &PyLazyImport_Type)
-
-
 typedef struct {
     PyObject_HEAD
     PyObject *lz_lazy_import;
@@ -27,9 +22,13 @@ typedef struct {
 } PyLazyImportObject;
 
 
-PyAPI_FUNC(PyObject *) PyLazyImport_GetName(PyObject *lazy_import);
-PyAPI_FUNC(PyObject *) PyLazyImport_NewModule(PyObject *name, PyObject *globals, PyObject *locals, PyObject *fromlist, PyObject *level);
-PyAPI_FUNC(PyObject *) PyLazyImport_NewObject(PyObject *from, PyObject *name);
+PyAPI_FUNC(PyObject *) _PyLazyImport_GetName(PyObject *lazy_import);
+PyAPI_FUNC(PyObject *) _PyLazyImport_NewModule(PyObject *name,
+                                               PyObject *globals,
+                                               PyObject *locals,
+                                               PyObject *fromlist,
+                                               PyObject *level);
+PyAPI_FUNC(PyObject *) _PyLazyImport_NewObject(PyObject *from, PyObject *name);
 
 
 #ifdef __cplusplus

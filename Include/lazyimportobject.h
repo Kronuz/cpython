@@ -6,12 +6,9 @@
 extern "C" {
 #endif
 
+PyAPI_DATA(PyTypeObject) PyLazyImport_Type;
 
-#ifndef Py_LIMITED_API
-#  define Py_CPYTHON_LAZYIMPORTOBJECT_H
-#  include "cpython/lazyimportobject.h"
-#  undef Py_CPYTHON_LAZYIMPORTOBJECT_H
-#endif
+#define PyLazyImport_CheckExact(op) Py_IS_TYPE((op), &PyLazyImport_Type)
 
 #ifdef __cplusplus
 }

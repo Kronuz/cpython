@@ -68,6 +68,7 @@ extern Py_ssize_t _Py_dict_lookup_keep_lazy(PyDictObject *mp, PyObject *key, Py_
 extern Py_ssize_t _PyDict_GetItemHint(PyDictObject *, PyObject *, Py_ssize_t, PyObject **);
 extern Py_ssize_t _PyDictKeys_StringLookup(PyDictKeysObject* dictkeys, PyObject *key);
 extern PyObject *_PyDict_LoadGlobal(PyDictObject *, PyDictObject *, PyObject *);
+extern PyObject *_PyDict_GetItemKeepLazy(PyObject *, PyObject *);
 
 /* Consumes references to key and value */
 extern int _PyDict_SetItem_Take2(PyDictObject *op, PyObject *key, PyObject *value);

@@ -358,6 +358,7 @@ SYMBOL_NAMES = (
     "PyIter_Check",
     "PyIter_Next",
     "PyIter_Send",
+    "PyLazyImport_Type",
     "PyListIter_Type",
     "PyListRevIter_Type",
     "PyList_Append",
