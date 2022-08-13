@@ -2397,7 +2397,8 @@ _PyDict_Next(PyObject *op, Py_ssize_t *ppos, PyObject **pkey,
  * and exceptions weren't possible).  So, while the original intent was that a
  * 0 return meant the end of the dictionary was reached, in reality it can mean
  * that, or that an error (suppressed) occurred while resolving the values, or
- * that some error (suppressed) occurred when reciving an invalid type of object.
+ * that some error (suppressed) occurred when receiving an invalid type of
+ * object.
  */
 
 int
