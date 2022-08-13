@@ -1146,7 +1146,7 @@ def _find_and_load_unlocked(name, import_):
     try:
         _imp._maybe_set_submodule_attribute(parent, child, module, name)
     except Exception as e:
-        msg = f"Cannot set an attribute on {parent!r} for child module {child!r}"
+        msg = f"Cannot set an attribute on {parent!r} for child module {child!r}: {e!r}"
         _warnings.warn(msg, ImportWarning)
     return module
 
