@@ -64,8 +64,8 @@ typedef struct _PyInterpreterFrame {
     bool is_entry;  // Whether this is the "root" frame for the current _PyCFrame.
     char owner;
     short lazy_imports : 2; /* flag for lazy imports status in the current frame */
-    short lazy_imports_cache : 1;
-    short lazy_imports_cache_seq : 13;
+    short lazy_imports_cache : 1; /* resolved state of lazy import is cached here */
+    short lazy_imports_cache_seq : 13; /* sequencial needed to bust lazy imports cache */
     /* Locals and stack */
     PyObject *localsplus[1];
 } _PyInterpreterFrame;
