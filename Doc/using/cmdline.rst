@@ -314,8 +314,7 @@ Miscellaneous options
 
    Enable lazy imports.
 
-   .. versionchanged:: 3.12
-      Enables lazy imports according to :pep:`690`.
+   .. versionadded:: 3.12
 
 
 .. cmdoption:: -O
