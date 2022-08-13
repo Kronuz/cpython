@@ -2171,12 +2171,10 @@ PyImport_LoadLazyImport(PyObject *lazy_import, int deep)
         if (lz->lz_resolving != NULL) {
             resolving = PySet_Contains(lz->lz_resolving, thread_id);
             if (resolving < 0) {
-                return NULL;
+                goto error;
             }
         }
-        if (resolving) {
-            PyErr_Clear();
-        } else {
+        if (!resolving) {
             if (lz->lz_resolving == NULL) {
                 lz->lz_resolving = PySet_New(NULL);
                 if (lz->lz_resolving == NULL) {
@@ -2188,14 +2186,14 @@ PyImport_LoadLazyImport(PyObject *lazy_import, int deep)
             }
             resolved = _imp_load_lazy_import_impl(lz, deep);
             if (PySet_Discard(lz->lz_resolving, thread_id) < 0) {
-                Py_DECREF(resolved);
+                Py_XDECREF(resolved);
                 resolved = NULL;
                 goto error;
             }
-        }
-        if (resolved != NULL) {
-            assert(!PyLazyImport_CheckExact(resolved));
-            lz->lz_resolved = resolved;
+            if (resolved != NULL) {
+                assert(!PyLazyImport_CheckExact(resolved));
+                lz->lz_resolved = resolved;
+            }
         }
     }
   error:

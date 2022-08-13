@@ -2980,6 +2980,8 @@ PyDict_ResolveLazyImports(PyObject *dict)
         return 0;
     }
 
+    PyThreadState *tstate = _PyThreadState_GET();
+
 top:
     version_tag = mp->ma_version_tag;
 
@@ -2989,47 +2991,16 @@ top:
         return -1;
     }
     n = PyList_Size(v);
-    PyThreadState *tstate = _PyThreadState_GET();
     for (i = 0; i < n; i++) {
         item = PyList_GET_ITEM(v, i);
         value = PyTuple_GET_ITEM(item, 1);
         assert(PyLazyImport_CheckExact(value));
         resolved_value = PyImport_LoadLazyImport(value, 0);
         if (resolved_value == NULL) {
-            /* import failed, check if we want to just ignore... */
-            PyObject *et, *ev, *tb;
-            _PyErr_Fetch(tstate, &et, &ev, &tb);
-            int is_import_error = PyErr_GivenExceptionMatches(ev, PyExc_ImportError);
-            int is_attribute_error = !is_import_error && PyErr_GivenExceptionMatches(ev, PyExc_AttributeError);
-            if (is_import_error || is_attribute_error) {
-                if (is_import_error) {
-                    PyObject *mod = PyImport_GetModule(((PyImportErrorObject *)ev)->name);
-                    if (mod != NULL) {
-                        PyObject *spec = PyObject_GetAttr(mod, &_Py_ID(__spec__));
-                        if (spec != NULL) {
-                            if (_PyModuleSpec_IsInitializing(spec)) {
-                                /* skip error if module is being initialized */
-                                Py_XDECREF(et);
-                                Py_XDECREF(ev);
-                                Py_XDECREF(tb);
-                                continue;
-                            }
-                        }
-                    }
-                }
-                PyObject *es = PyObject_Str(ev);
-                if (strstr(PyUnicode_AsUTF8(es), "(most likely due to a circular import)") != NULL) {
-                    /* skip circular-import related errors */
-                    Py_DECREF(es);
-                    Py_XDECREF(et);
-                    Py_XDECREF(ev);
-                    Py_XDECREF(tb);
-                    continue;
-                }
-                Py_DECREF(es);
+            if (_PyErr_Occurred(tstate)) {
+                return -1;
             }
-            _PyErr_Restore(tstate, et, ev, tb);
-            return -1;
+            continue;
         }
         key = PyTuple_GET_ITEM(item, 0);
         if (PyDict_SetItem((PyObject *)mp, key, resolved_value) < 0) {
