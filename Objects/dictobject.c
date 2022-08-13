@@ -476,14 +476,6 @@ static PyDictKeysObject empty_keys_struct = {
 #  define ASSERT_CONSISTENT(op) assert(_PyDict_CheckConsistency((PyObject *)(op), 0))
 #endif
 
-int
-_PyDict_HasLazyImports(PyObject *dict)
-{
-    assert(PyDict_Check(dict));
-    PyDictObject *mp = (PyDictObject *)dict;
-    return mp->ma_keys->dk_lazy_imports;
-}
-
 static inline int
 get_index_from_order(PyDictObject *mp, Py_ssize_t i)
 {
@@ -2414,7 +2406,7 @@ PyDict_Next(PyObject *op, Py_ssize_t *ppos, PyObject **pkey, PyObject **pvalue)
                 return 0;
             }
         }
-        if (_PyDict_HasLazyImports(op)) {
+        if (((PyDictObject *)op)->ma_keys->dk_lazy_imports) {
             return 0;
         }
     }
@@ -2441,7 +2433,7 @@ PyDict_NextWithError(PyObject *op, Py_ssize_t *ppos, PyObject **pkey, PyObject *
                 return 0;
             }
         }
-        if (_PyDict_HasLazyImports(op)) {
+        if (((PyDictObject *)op)->ma_keys->dk_lazy_imports) {
             PyErr_Format(PyExc_ValueError,
                          "A dict without lazy imports is required");
             return 0;
