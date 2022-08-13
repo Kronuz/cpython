@@ -2991,10 +2991,11 @@ top:
         assert(PyLazyImport_CheckExact(value));
         resolved_value = _PyImport_LoadLazyImport(value, 0);
         if (resolved_value == NULL) {
-            if (_PyErr_Occurred(tstate)) {
-                return -1;
+            if (!_PyErr_Occurred(tstate)) {
+                PyErr_Format(PyExc_ImportError,
+                    "Unable to resolve all lazy imports");
             }
-            continue;
+            return -1;
         }
         key = PyTuple_GET_ITEM(item, 0);
         if (PyDict_SetItem((PyObject *)mp, key, resolved_value) < 0) {
@@ -3010,20 +3011,7 @@ top:
         goto top;
     }
 
-    /* check to see if we're done with the deferred objects in the dictionary */
-    v = dict_lazy_items_only(mp);
-    if (v == NULL) {
-        return -1;
-    }
-    n = PyList_Size(v);
-    if (n == 0) {
-        mp->ma_keys->dk_lazy_imports = 0;
-    } else {
-        if (!PyErr_Occurred()) {
-            PyErr_Format(PyExc_ImportError,
-                "Unable to resolve all lazy imports");
-        }
-    }
+    mp->ma_keys->dk_lazy_imports = 0;
     ASSERT_CONSISTENT(mp);
     return n;
 }
