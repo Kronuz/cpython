@@ -1751,7 +1751,7 @@ import_find_and_load(PyThreadState *tstate, PyObject *abs_name)
 }
 
 static int
-lazy_loaded_contains_parent(PyObject *module, PyObject *name)
+has_lazy_submodule(PyObject *module, PyObject *name)
 {
     assert(module != NULL);
     PyObject *lazy_submodules = PyObject_GetAttr(module, &_Py_ID(__lazy_submodules__));
@@ -1768,7 +1768,7 @@ lazy_loaded_contains_parent(PyObject *module, PyObject *name)
 }
 
 static int
-lazy_loaded_add_parent(PyObject *module, PyObject *name)
+add_lazy_submodule(PyObject *module, PyObject *name)
 {
     assert(module != NULL);
     PyObject *lazy_submodules = PyObject_GetAttr(module, &_Py_ID(__lazy_submodules__));
@@ -1890,7 +1890,7 @@ feed_lazy_loaded(PyThreadState *tstate, PyObject *name)
                 return -1;
             }
             if (PyDict_CheckExact(parent_dict)) {
-                if (!lazy_loaded_contains_parent(parent_module, child)) {
+                if (!has_lazy_submodule(parent_module, child)) {
                     PyLazyImportObject *lazy_module_attr = new_lazy_import(parent, child, parent_dict, parent_dict);
                     if (lazy_module_attr == NULL) {
                         Py_DECREF(parent_dict);
@@ -1910,7 +1910,7 @@ feed_lazy_loaded(PyThreadState *tstate, PyObject *name)
                         return -1;
                     }
                     Py_DECREF(lazy_module_attr);
-                    if (lazy_loaded_add_parent(parent_module, child) < 0) {
+                    if (add_lazy_submodule(parent_module, child) < 0) {
                         Py_XDECREF(parent_dict);
                         Py_DECREF(parent_module);
                         Py_DECREF(child);
@@ -3167,7 +3167,7 @@ _imp__maybe_set_submodule_attribute_impl(PyObject *module, PyObject *parent,
                 goto error;
             }
             if (PyDict_CheckExact(parent_dict)) {
-                if (lazy_loaded_contains_parent(parent_module, child)) {
+                if (has_lazy_submodule(parent_module, child)) {
                     PyObject *attr = _PyDict_GetItemKeepLazy(parent_dict, child);
                     if (attr == NULL) {
                         if (PyErr_Occurred()) {
@@ -3210,7 +3210,7 @@ _imp__maybe_set_submodule_attribute_impl(PyObject *module, PyObject *parent,
             Py_ssize_t pos = 0;
             Py_hash_t hash;
             while (_PySet_NextEntry(lazy_loaded_set, &pos, &attr_name, &hash)) {
-                if (!lazy_loaded_contains_parent(child_module, attr_name)) {
+                if (!has_lazy_submodule(child_module, attr_name)) {
                     if (child_dict == NULL) {
                         child_dict = PyObject_GetAttr(child_module, &_Py_ID(__dict__));
                         if (child_dict == NULL) {
