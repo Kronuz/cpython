@@ -5,19 +5,19 @@ import self
 import sys
 import importlib
 
-import test.lazyimports.customized_modules.module_delete
-test.lazyimports.customized_modules.module_delete
-import test.lazyimports.customized_modules.module_delete.module_delete_sub
+import test.lazyimports.data.metasyntactic.waldo
+test.lazyimports.data.metasyntactic.waldo
+import test.lazyimports.data.metasyntactic.waldo.fred
 
-del sys.modules["test.lazyimports.customized_modules.module_delete"]
+del sys.modules["test.lazyimports.data.metasyntactic.waldo"]
 
-import test.lazyimports.customized_modules.module_delete
-test.lazyimports.customized_modules.module_delete
-import test.lazyimports.customized_modules.module_delete.module_delete_sub
+import test.lazyimports.data.metasyntactic.waldo
+test.lazyimports.data.metasyntactic.waldo
+import test.lazyimports.data.metasyntactic.waldo.fred
 
-self.assertIs(test.lazyimports.customized_modules.module_delete, sys.modules["test.lazyimports.customized_modules.module_delete"])
+self.assertIs(test.lazyimports.data.metasyntactic.waldo, sys.modules["test.lazyimports.data.metasyntactic.waldo"])
 
 if self._lazy_imports:
-    self.assertTrue(importlib.is_lazy_import(test.lazyimports.customized_modules.module_delete.__dict__, "module_delete_sub"))
+    self.assertTrue(importlib.is_lazy_import(test.lazyimports.data.metasyntactic.waldo.__dict__, "fred"))
 else:
-    self.assertNotIn("module_delete_sub", dir(test.lazyimports.customized_modules.module_delete))
+    self.assertNotIn("fred", dir(test.lazyimports.data.metasyntactic.waldo))

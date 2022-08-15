@@ -23,7 +23,7 @@ class LazyImportsTest(unittest.TestCase):
             stripped_modules = sys.modules.copy()
             base = os.path.dirname(__file__)
             for path in os.listdir(os.path.join(base, "lazyimports")):
-                if path.startswith("_"):
+                if path == "data" or path.startswith(("_", ".")):
                     continue
                 if path.endswith(".py"):
                     path = path[:-3]

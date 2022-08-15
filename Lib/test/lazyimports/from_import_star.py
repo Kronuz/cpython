@@ -8,9 +8,9 @@ import importlib
 Verify `from foo import *`, imported names that are lazy in `foo` should still be lazy.
 """
 
-from test.lazyimports.customized_modules.module import *
+from test.lazyimports.data.metasyntactic.names import *
 
-self.assertTrue(importlib.is_lazy_import(globals(), "sub_module1"))
-self.assertTrue(importlib.is_lazy_import(globals(), "sub_module2"))
-self.assertTrue(importlib.is_lazy_import(globals(), "sub_module3"))
-self.assertFalse(importlib.is_lazy_import(globals(), "direct_value"))
+self.assertTrue(importlib.is_lazy_import(globals(), "Foo"))
+self.assertTrue(importlib.is_lazy_import(globals(), "Ack"))
+self.assertTrue(importlib.is_lazy_import(globals(), "Bar"))
+self.assertFalse(importlib.is_lazy_import(globals(), "Metasyntactic"))

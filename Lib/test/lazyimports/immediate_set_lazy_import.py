@@ -7,11 +7,11 @@ if not self._lazy_imports:
 
 import importlib
 
-from test.lazyimports.customized_modules import foo
+from test.lazyimports.data.metasyntactic import foo
 
 importlib.set_lazy_imports(excluding=["test.lazyimports.immediate_set_lazy_import"])
 
-from test.lazyimports.customized_modules import waldo
+from test.lazyimports.data.metasyntactic import waldo
 
 self.assertTrue(importlib.is_lazy_import(globals(), "foo"))
 self.assertFalse(importlib.is_lazy_import(globals(), "waldo"))

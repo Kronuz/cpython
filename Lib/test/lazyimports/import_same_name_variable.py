@@ -5,8 +5,8 @@ Different import/define orderings will expect different results
 import self
 import sys
 
-from test.lazyimports.customized_modules import module_same_name_var_order1
+from test.lazyimports.data import module_same_name_var_order1
 self.assertEqual(module_same_name_var_order1.bar, "Blah")
 
-from test.lazyimports.customized_modules import module_same_name_var_order2
-self.assertEqual(module_same_name_var_order2.bar, sys.modules["test.lazyimports.customized_modules.module_same_name_var_order2.bar"])
+from test.lazyimports.data import module_same_name_var_order2
+self.assertEqual(module_same_name_var_order2.bar, sys.modules["test.lazyimports.data.module_same_name_var_order2.bar"])

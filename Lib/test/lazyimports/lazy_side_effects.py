@@ -3,9 +3,9 @@ Test the side effects when loading a lazy imports object
 """
 import self
 
-import test.lazyimports.customized_modules.foo.bar
-from test.lazyimports.customized_modules.foo import ack
-import test.lazyimports.customized_modules.foo as foo
+import test.lazyimports.data.metasyntactic.foo.bar
+from test.lazyimports.data.metasyntactic.foo import ack
+import test.lazyimports.data.metasyntactic.foo as foo
 
 self.assertEqual(foo.bar.Bar, "Bar")
 

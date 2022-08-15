@@ -1,20 +1,20 @@
 import self
 import sys
 
-import test.lazyimports.customized_modules.foo as foo
+import test.lazyimports.data.metasyntactic.foo as foo
 
-import test.lazyimports.customized_modules.foo.bar.baz
+import test.lazyimports.data.metasyntactic.foo.bar.baz
 
-first_bar = test.lazyimports.customized_modules.foo.bar
+first_bar = test.lazyimports.data.metasyntactic.foo.bar
 
-del sys.modules["test.lazyimports.customized_modules.foo.bar"]
+del sys.modules["test.lazyimports.data.metasyntactic.foo.bar"]
 
-import test.lazyimports.customized_modules.foo.bar.thud
+import test.lazyimports.data.metasyntactic.foo.bar.thud
 
-second_bar = test.lazyimports.customized_modules.foo.bar
+second_bar = test.lazyimports.data.metasyntactic.foo.bar
 
-self.assertIn("test.lazyimports.customized_modules.foo.bar", set(sys.modules))
-sys_modules_bar = sys.modules["test.lazyimports.customized_modules.foo.bar"]
+self.assertIn("test.lazyimports.data.metasyntactic.foo.bar", set(sys.modules))
+sys_modules_bar = sys.modules["test.lazyimports.data.metasyntactic.foo.bar"]
 
 self.assertIsNot(first_bar, second_bar)
 self.assertIsNot(sys_modules_bar, first_bar)
