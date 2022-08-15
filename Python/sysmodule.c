@@ -3197,6 +3197,12 @@ _PySys_Create(PyThreadState *tstate, PyObject **sysmod_p)
     }
     interp->modules = modules;
 
+    PyObject *lazy_attributes = PyDict_New();
+    if (lazy_attributes == NULL) {
+        goto error;
+    }
+    interp->lazy_attributes = lazy_attributes;
+
     PyObject *sysmod = _PyModule_CreateInitialized(&sysmodule, PYTHON_API_VERSION);
     if (sysmod == NULL) {
         return _PyStatus_ERR("failed to create a module object");
@@ -3210,6 +3216,10 @@ _PySys_Create(PyThreadState *tstate, PyObject **sysmod_p)
     interp->sysdict = sysdict;
 
     if (PyDict_SetItemString(sysdict, "modules", interp->modules) < 0) {
+        goto error;
+    }
+
+    if (PyDict_SetItemString(sysdict, "lazy_attributes", interp->lazy_attributes) < 0) {
         goto error;
     }
 

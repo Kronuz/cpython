@@ -12,8 +12,10 @@ from test.support.import_helper import import_fresh_module
 
 class LazyImportsTest(unittest.TestCase):
     def test_lazy_imports(self):
+        original_lazy_attributes = sys.lazy_attributes.copy()
         original_modules = sys.modules.copy()
         try:
+            sys.lazy_attributes.clear()
             sys.modules["self"] = self
             for modname in list(sys.modules):
                 if modname == "test" or modname.startswith("test."):
@@ -38,10 +40,13 @@ class LazyImportsTest(unittest.TestCase):
                             _imp._set_lazy_imports(*previously)
                             del self._test_name
                             del self._lazy_imports
+                            sys.lazy_attributes.clear()
                             sys.modules.clear()
                             sys.modules.update(stripped_modules)
 
         finally:
+            sys.lazy_attributes.clear()
+            sys.lazy_attributes.update(original_lazy_attributes)
             sys.modules.clear()
             sys.modules.update(original_modules)
 

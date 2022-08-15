@@ -1816,14 +1816,8 @@ static int
 feed_lazy_loaded(PyThreadState *tstate, PyObject *name)
 {
     int ret = 1;
+    assert(tstate->interp->lazy_attributes != NULL);
     PyObject *lazy_attributes = tstate->interp->lazy_attributes;
-    if (lazy_attributes == NULL) {
-        lazy_attributes = PyDict_New();
-        if (lazy_attributes == NULL) {
-            return -1;
-        }
-        tstate->interp->lazy_attributes = lazy_attributes;
-    }
     Py_INCREF(name);
     PyObject *parent = NULL;
     PyObject *child = NULL;
