@@ -1737,7 +1737,7 @@ _PyDict_FromItems(PyObject *const *keys, Py_ssize_t keys_offset,
         ks += keys_offset;
     }
 
-    PyObject *dict = dict_new_presized(length, unicode, 0);
+    PyObject *dict = dict_new_presized(length, unicode, false);
     if (dict == NULL) {
         return NULL;
     }
