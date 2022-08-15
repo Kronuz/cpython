@@ -1039,17 +1039,15 @@ The initial probe index is computed as hash mod the table size. Subsequent
 probe indices are computed as explained earlier.
 
 All arithmetic on hash should ignore overflow.
-
-_Py_dict_lookup_keep_lazy() is general-purpose, and may return DKIX_ERROR if
-(and only if) a comparison raises an exception.
-When the key isn't found a DKIX_EMPTY is returned.
 */
 Py_ssize_t
-_Py_dict_lookup_keep_lazy(PyDictObject *mp, PyObject *key, Py_hash_t hash, PyObject **value_addr)
+_Py_dict_lookup_impl(PyDictObject *mp, PyObject *key, Py_hash_t hash, PyObject ***value_ptr_addr, PyObject **startkey_addr)
 {
     PyDictKeysObject *dk;
     DictKeysKind kind;
     Py_ssize_t ix;
+    assert(value_ptr_addr != NULL);
+    assert(startkey_addr != NULL);
 
 start:
     dk = mp->ma_keys;
@@ -1065,71 +1063,16 @@ start:
                 goto start;
             }
         }
-
-        if (ix >= 0) {
-            if (kind == DICT_KEYS_SPLIT) {
-                *value_addr = mp->ma_values->values[ix];
-            }
-            else {
-                *value_addr = DK_UNICODE_ENTRIES(dk)[ix].me_value;
-            }
-        }
-        else {
-            *value_addr = NULL;
-        }
-    }
-    else {
-        ix = dictkeys_generic_lookup(mp, dk, key, hash);
-        if (ix == DKIX_KEY_CHANGED) {
-            goto start;
-        }
-        if (ix >= 0) {
-            *value_addr = DK_ENTRIES(dk)[ix].me_value;
-        }
-        else {
-            *value_addr = NULL;
-        }
-    }
-
-    return ix;
-}
-
-Py_ssize_t
-_Py_dict_lookup(PyDictObject *mp, PyObject *key, Py_hash_t hash, PyObject **value_addr)
-{
-    PyObject *value, **value_ptr;
-    PyDictKeysObject *dk;
-    DictKeysKind kind;
-    PyObject *startkey = NULL;
-    Py_ssize_t ix;
-
-start:
-    dk = mp->ma_keys;
-    kind = dk->dk_kind;
-    value = NULL;
-    value_ptr = NULL;
-
-    if (kind != DICT_KEYS_GENERAL) {
-        if (PyUnicode_CheckExact(key)) {
-            ix = unicodekeys_lookup_unicode(dk, key, hash);
-        }
-        else {
-            ix = unicodekeys_lookup_generic(mp, dk, key, hash);
-            if (ix == DKIX_KEY_CHANGED) {
-                goto start;
-            }
-        }
-
         if (ix >= 0) {
             PyDictUnicodeEntry *ep = &DK_UNICODE_ENTRIES(dk)[ix];
             if (kind == DICT_KEYS_SPLIT) {
                 assert(mp->ma_values != NULL);
-                value_ptr = &mp->ma_values->values[ix];
+                *value_ptr_addr = &mp->ma_values->values[ix];
             }
             else {
-                value_ptr = &ep->me_value;
+                *value_ptr_addr = &ep->me_value;
             }
-            startkey = ep->me_key;
+            *startkey_addr = ep->me_key;
         }
     }
     else {
@@ -1139,14 +1082,57 @@ start:
         }
         if (ix >= 0) {
             PyDictKeyEntry *ep = &DK_ENTRIES(dk)[ix];
-            value_ptr = &ep->me_value;
-            startkey = ep->me_key;
+            *value_ptr_addr = &ep->me_value;
+            *startkey_addr = ep->me_key;
         }
     }
 
-    if (value_ptr != NULL)
-        value = *value_ptr;
+    return ix;
+}
+
+/*
+_Py_dict_lookup_keep_lazy() is general-purpose, and may return DKIX_ERROR if
+(and only if) a comparison raises an exception.
+When the key isn't found a DKIX_EMPTY is returned.
+*/
+Py_ssize_t
+_Py_dict_lookup_keep_lazy(PyDictObject *mp, PyObject *key, Py_hash_t hash, PyObject **value_addr)
+{
+    PyObject *startkey;
+    PyObject **value_ptr;
+    int ix = _Py_dict_lookup_impl(mp, key, hash, &value_ptr, &startkey);
+    if (ix < 0) {
+        *value_addr = NULL;
+        return ix;
+    }
+    assert(value_ptr != NULL);
+    *value_addr = *value_ptr;
+    return ix;
+}
+
+/*
+_Py_dict_lookup() is general-purpose, and may return DKIX_ERROR if
+(and only if) a comparison raises an exception.
+If the requested object is an unresolved lazy import, it resolves the object. It
+may return a DKIX_VALUE_ERROR if the related import fails, raising an exception.
+When the key isn't found a DKIX_EMPTY is returned.
+*/
+Py_ssize_t
+_Py_dict_lookup(PyDictObject *mp, PyObject *key, Py_hash_t hash, PyObject **value_addr)
+{
+    PyObject *startkey;
+    PyObject **value_ptr;
+    int ix = _Py_dict_lookup_impl(mp, key, hash, &value_ptr, &startkey);
+    if (ix < 0) {
+        *value_addr = NULL;
+        return ix;
+    }
+    assert(value_ptr != NULL);
+    assert(startkey != NULL);
+    PyObject *value = *value_ptr;
     if (value && PyLazyImport_CheckExact(value)) {
+        PyDictKeysObject *dk = mp->ma_keys;
+        DictKeysKind kind = dk->dk_kind;
         assert(dk->dk_lazy_imports);
         PyObject *resolved_value = _PyImport_LoadLazyImport(value, 0);
         if (resolved_value == NULL) {
@@ -1167,7 +1153,6 @@ start:
             }
         }
     }
-
     *value_addr = value;
     return ix;
 }
