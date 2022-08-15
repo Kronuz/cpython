@@ -10,16 +10,6 @@ from test.support.script_helper import run_python_until_end
 from test.support.import_helper import import_fresh_module
 
 
-class TestLazyImportsSanity(unittest.TestCase):
-    @unittest.skipIfLazyImportsIsDisabled("Test relevant only when running with lazy imports enabled")
-    def test_lazy_imports_is_enabled(self):
-        self.assertTrue(importlib.is_lazy_imports_enabled())
-
-    @unittest.skipIfLazyImportsIsEnabled("Test relevant only when running with lazy imports disabled")
-    def test_lazy_imports_is_disabled(self):
-        self.assertFalse(importlib.is_lazy_imports_enabled())
-
-
 class LazyImportsTest(unittest.TestCase):
     def test_lazy_imports(self):
         original_modules = sys.modules.copy()

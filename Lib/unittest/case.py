@@ -181,22 +181,6 @@ def skipUnless(condition, reason):
         return skip(reason)
     return _id
 
-def skipIfLazyImportsIsEnabled(reason):
-    """
-    Skip a test if lazy imports is enabled.
-    """
-    if importlib.is_lazy_imports_enabled():
-        return skip(reason)
-    return _id
-
-def skipIfLazyImportsIsDisabled(reason):
-    """
-    Skip a test if lazy imports is disabled.
-    """
-    if not importlib.is_lazy_imports_enabled():
-        return skip(reason)
-    return _id
-
 def expectedFailure(test_item):
     test_item.__unittest_expecting_failure__ = True
     return test_item
