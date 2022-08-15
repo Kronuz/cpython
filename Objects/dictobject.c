@@ -2835,14 +2835,11 @@ dict_values(PyDictObject *mp)
 }
 
 static PyObject *
-dict_items(PyDictObject *mp)
+dict_items_keep_lazy(PyDictObject *mp)
 {
     PyObject *v;
     Py_ssize_t i, n;
     PyObject *item;
-
-    if (PyDict_ResolveLazyImports((PyObject *)mp) != 0)
-        return NULL;
 
     /* Preallocate the list of tuples, to avoid allocations during
      * the loop over the items, which could trigger GC, which
@@ -2886,62 +2883,12 @@ dict_items(PyDictObject *mp)
 }
 
 static PyObject *
-dict_lazy_items_only(PyDictObject *mp)
+dict_items(PyDictObject *mp)
 {
-    PyObject *v, *s;
-    Py_ssize_t i, n;
-    PyObject *item;
-
-    /* Preallocate the list of tuples, to avoid allocations during
-     * the loop over the items, which could trigger GC, which
-     * could resize the dict. :-(
-     */
-  again:
-    n = mp->ma_used;
-    v = PyList_New(n);
-    if (v == NULL)
+    if (PyDict_ResolveLazyImports((PyObject *)mp) != 0)
         return NULL;
-    for (i = 0; i < n; i++) {
-        item = PyTuple_New(2);
-        if (item == NULL) {
-            Py_DECREF(v);
-            return NULL;
-        }
-        PyList_SET_ITEM(v, i, item);
-    }
-    if (n != mp->ma_used) {
-        /* Durnit.  The allocations caused the dict to resize.
-         * Just start over, this shouldn't normally happen.
-         */
-        Py_DECREF(v);
-        goto again;
-    }
 
-    /* Nothing we do below makes any function calls. */
-    Py_ssize_t j = 0, pos = 0;
-    PyObject *key, *value, **value_ptr;
-    Py_hash_t hash;
-    while (_PyDict_Next((PyObject*)mp, &pos, &key, &value, &hash, &value_ptr)) {
-        if (PyLazyImport_CheckExact(value)) {
-            PyObject *resolved_value = ((PyLazyImportObject *)value)->lz_resolved;
-            if (resolved_value != NULL) {
-                Py_INCREF(resolved_value);
-                Py_DECREF(*value_ptr);
-                *value_ptr = resolved_value;
-            } else {
-                assert(j < n);
-                PyObject *item = PyList_GET_ITEM(v, j);
-                Py_INCREF(key);
-                PyTuple_SET_ITEM(item, 0, key);
-                Py_INCREF(value);
-                PyTuple_SET_ITEM(item, 1, value);
-                j++;
-            }
-        }
-    }
-    s = PyList_GetSlice(v, 0, j);
-    Py_DECREF(v);
-    return s;
+    return dict_items_keep_lazy(mp);
 }
 
 Py_ssize_t
@@ -2965,7 +2912,7 @@ top:
     version_tag = mp->ma_version_tag;
 
     /* try importing as many lazy import objects as possible */
-    v = dict_lazy_items_only(mp);
+    v = dict_items_keep_lazy(mp);
     if (v == NULL) {
         return -1;
     }
@@ -2973,21 +2920,24 @@ top:
     for (i = 0; i < n; i++) {
         item = PyList_GET_ITEM(v, i);
         value = PyTuple_GET_ITEM(item, 1);
-        assert(PyLazyImport_CheckExact(value));
-        resolved_value = _PyImport_LoadLazyImport(value, 0);
-        if (resolved_value == NULL) {
-            if (!_PyErr_Occurred(tstate)) {
-                PyErr_Format(PyExc_ImportError,
-                    "Unable to resolve all lazy imports");
+        if (PyLazyImport_CheckExact(value)) {
+            resolved_value = _PyImport_LoadLazyImport(value, 0);
+            if (resolved_value == NULL) {
+                if (!_PyErr_Occurred(tstate)) {
+                    PyErr_Format(PyExc_ImportError,
+                        "Unable to resolve all lazy imports");
+                }
+                Py_DECREF(v);
+                return -1;
             }
-            return -1;
-        }
-        key = PyTuple_GET_ITEM(item, 0);
-        if (PyDict_SetItem((PyObject *)mp, key, resolved_value) < 0) {
+            key = PyTuple_GET_ITEM(item, 0);
+            if (PyDict_SetItem((PyObject *)mp, key, resolved_value) < 0) {
+                Py_DECREF(resolved_value);
+                Py_DECREF(v);
+                return -1;
+            }
             Py_DECREF(resolved_value);
-            return -1;
         }
-        Py_DECREF(resolved_value);
     }
     Py_DECREF(v);
 
@@ -2998,7 +2948,7 @@ top:
 
     mp->ma_keys->dk_lazy_imports = 0;
     ASSERT_CONSISTENT(mp);
-    return n;
+    return 0;
 }
 
 /*[clinic input]
