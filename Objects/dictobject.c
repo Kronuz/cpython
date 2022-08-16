@@ -4922,8 +4922,11 @@ _PyDictView_New(PyObject *dict, PyTypeObject *type)
                      type->tp_name, Py_TYPE(dict)->tp_name);
         return NULL;
     }
-    if (PyDict_ResolveLazyImports(dict) != 0)
-        return NULL;
+    if (type == &PyDictItems_Type ||
+        type == &PyDictValues_Type) {
+        if (PyDict_ResolveLazyImports(dict) != 0)
+            return NULL;
+    }
     dv = PyObject_GC_New(_PyDictViewObject, type);
     if (dv == NULL)
         return NULL;
