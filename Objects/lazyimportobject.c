@@ -108,16 +108,28 @@ lazy_import_name(PyLazyImportObject *m)
 {
     if (m->lz_lazy_import != NULL) {
         PyObject *name = lazy_import_name((PyLazyImportObject *)m->lz_lazy_import);
+        if (name == NULL) {
+            return NULL;
+        }
         PyObject *res = PyUnicode_FromFormat("%U.%U", name, m->lz_name);
         Py_DECREF(name);
         return res;
     }
-    if (m->lz_fromlist == NULL ||
-        m->lz_fromlist == Py_None ||
-        !PyObject_IsTrue(m->lz_fromlist)) {
+    int has_from = 0;
+    if (m->lz_fromlist != NULL && m->lz_fromlist != Py_None) {
+        has_from = PyObject_IsTrue(m->lz_fromlist);
+        if (has_from < 0) {
+            return NULL;
+        }
+    }
+    if (!has_from) {
         Py_ssize_t dot = PyUnicode_FindChar(m->lz_name, '.', 0, PyUnicode_GET_LENGTH(m->lz_name), 1);
+        if (dot == -2) {
+            return NULL;
+        }
         if (dot >= 0) {
-            return PyUnicode_Substring(m->lz_name, 0, dot);
+            PyObject *ret = PyUnicode_Substring(m->lz_name, 0, dot);
+            return ret;
         }
     }
     Py_INCREF(m->lz_name);
@@ -128,6 +140,9 @@ static PyObject *
 lazy_import_repr(PyLazyImportObject *m)
 {
     PyObject *name = lazy_import_name(m);
+    if (name == NULL) {
+        return NULL;
+    }
     PyObject *res = PyUnicode_FromFormat("<lazy_import '%U'>", name);
     Py_DECREF(name);
     return res;
