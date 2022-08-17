@@ -3197,11 +3197,11 @@ _PySys_Create(PyThreadState *tstate, PyObject **sysmod_p)
     }
     interp->modules = modules;
 
-    PyObject *lazy_attributes = PyDict_New();
-    if (lazy_attributes == NULL) {
+    PyObject *lazy_modules = PyDict_New();
+    if (lazy_modules == NULL) {
         goto error;
     }
-    interp->lazy_attributes = lazy_attributes;
+    interp->lazy_modules = lazy_modules;
 
     PyObject *sysmod = _PyModule_CreateInitialized(&sysmodule, PYTHON_API_VERSION);
     if (sysmod == NULL) {
@@ -3219,7 +3219,7 @@ _PySys_Create(PyThreadState *tstate, PyObject **sysmod_p)
         goto error;
     }
 
-    if (PyDict_SetItemString(sysdict, "lazy_attributes", interp->lazy_attributes) < 0) {
+    if (PyDict_SetItemString(sysdict, "lazy_modules", interp->lazy_modules) < 0) {
         goto error;
     }
 
