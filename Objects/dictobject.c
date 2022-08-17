@@ -2357,51 +2357,18 @@ _PyDict_Next(PyObject *op, Py_ssize_t *ppos, PyObject **pkey,
  *     Py_ssize_t i;
  *     PyObject *key, *value;
  *     i = 0;   # important!  i should not otherwise be changed by you
- *     while (PyDict_Next(yourdict, &i, &key, &value)) {
+ *     while (PyDict_NextWithError(yourdict, &i, &key, &value)) {
  *         Refer to borrowed references in key and value.
  *     }
  *
  * Return 1 on success, return 0 when the reached the end of the dictionary
  * (or if op is not a dictionary)
  *
- * CAUTION:  In general, it isn't safe to use PyDict_Next in a loop that
+ * CAUTION:  In general, it isn't safe to use PyDict_NextWithError in a loop that
  * mutates the dict.  One exception:  it is safe if the loop merely changes
  * the values associated with the keys (but doesn't insert new keys or
  * delete keys), via PyDict_SetItem().
  *
- * Note that, for historical reasons, PyDict_Next() suppresses all errors
- * that may occur (originally dicts didn't support unresolved (lazy) objects,
- * and exceptions weren't possible).  So, while the original intent was that a
- * 0 return meant the end of the dictionary was reached, in reality it can mean
- * that, or that an error (suppressed) occurred while resolving the values, or
- * that some error (suppressed) occurred when receiving an invalid type of
- * object.
- */
-
-int
-PyDict_Next(PyObject *op, Py_ssize_t *ppos, PyObject **pkey, PyObject **pvalue)
-{
-    if (!PyDict_Check(op)) {
-        return 0;
-    }
-    if (pvalue != NULL) {
-        if (*ppos == 0) {
-            if (PyDict_ResolveLazyImports(op) != 0) {
-                PyErr_Clear();
-                return 0;
-            }
-        }
-        if (((PyDictObject *)op)->ma_keys->dk_lazy_imports) {
-            return 0;
-        }
-    }
-    return _PyDict_Next(op, ppos, pkey, pvalue, NULL, NULL);
-}
-
-/* Variant of PyDict_Next() that doesn't suppress exceptions.
-   This returns 0 *with* an exception set if an exception occurred.
-   It returns 0 *without* an exception set when the reached the end of
-   the dictionary.
 */
 int
 PyDict_NextWithError(PyObject *op, Py_ssize_t *ppos, PyObject **pkey, PyObject **pvalue)
@@ -2421,6 +2388,42 @@ PyDict_NextWithError(PyObject *op, Py_ssize_t *ppos, PyObject **pkey, PyObject *
         if (((PyDictObject *)op)->ma_keys->dk_lazy_imports) {
             PyErr_Format(PyExc_ValueError,
                          "A dict without lazy imports is required");
+            return 0;
+        }
+    }
+    return _PyDict_Next(op, ppos, pkey, pvalue, NULL, NULL);
+}
+
+/*
+ * For historical reasons, PyDict_Next() suppresses all errors that may occur
+ * (originally dicts didn't support unresolved (lazy) objects, and exceptions
+ * weren't possible).  So, while the original intent was that a 0 return meant
+ * the end of the dictionary was reached, in reality it can mean that, or that
+ * an error (suppressed) occurred while resolving the values, or that some error
+ * (suppressed) occurred when receiving an invalid type of object. An unraisable
+ * error will be printed in these cases.
+ */
+int
+PyDict_Next(PyObject *op, Py_ssize_t *ppos, PyObject **pkey, PyObject **pvalue)
+{
+    if (!PyDict_Check(op)) {
+        PyErr_Format(PyExc_TypeError,
+                     "A dict argument is required, not '%s'",
+                     Py_TYPE(op)->tp_name);
+        PyErr_WriteUnraisable(NULL);
+        return 0;
+    }
+    if (pvalue != NULL) {
+        if (*ppos == 0) {
+            if (PyDict_ResolveLazyImports(op) != 0) {
+                PyErr_WriteUnraisable(NULL);
+                return 0;
+            }
+        }
+        if (((PyDictObject *)op)->ma_keys->dk_lazy_imports) {
+            PyErr_Format(PyExc_ValueError,
+                         "A dict without lazy imports is required");
+            PyErr_WriteUnraisable(NULL);
             return 0;
         }
     }
