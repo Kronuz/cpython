@@ -1100,7 +1100,7 @@ _Py_dict_lookup_keep_lazy(PyDictObject *mp, PyObject *key, Py_hash_t hash, PyObj
 {
     PyObject *startkey;
     PyObject **value_ptr;
-    int ix = _Py_dict_lookup_impl(mp, key, hash, &value_ptr, &startkey);
+    Py_ssize_t ix = _Py_dict_lookup_impl(mp, key, hash, &value_ptr, &startkey);
     if (ix < 0) {
         *value_addr = NULL;
         return ix;
@@ -1122,7 +1122,7 @@ _Py_dict_lookup(PyDictObject *mp, PyObject *key, Py_hash_t hash, PyObject **valu
 {
     PyObject *startkey;
     PyObject **value_ptr;
-    int ix = _Py_dict_lookup_impl(mp, key, hash, &value_ptr, &startkey);
+    Py_ssize_t ix = _Py_dict_lookup_impl(mp, key, hash, &value_ptr, &startkey);
     if (ix < 0) {
         *value_addr = NULL;
         return ix;
