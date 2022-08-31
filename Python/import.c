@@ -2905,9 +2905,7 @@ PyObject *
 PyImport_SetLazyImports(PyObject *enabled, PyObject *excluding)
 {
     PyObject *result = NULL;
-    PyThreadState *tstate = _PyThreadState_GET();
-    assert(tstate != NULL);
-    PyInterpreterState *interp = tstate->interp;
+    PyInterpreterState *interp = _PyInterpreterState_GET();
     assert(interp != NULL);
 
     result = PyTuple_Pack(
