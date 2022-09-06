@@ -63,6 +63,9 @@ typedef struct _PyInterpreterFrame {
     int stacktop;     /* Offset of TOS from localsplus  */
     bool is_entry;  // Whether this is the "root" frame for the current _PyCFrame.
     char owner;
+    short lazy_imports : 2; /* flag for lazy imports status in the current frame */
+    short lazy_imports_cache : 1; /* resolved state of lazy import is cached here */
+    short lazy_imports_cache_seq : 13; /* sequencial needed to bust lazy imports cache */
     /* Locals and stack */
     PyObject *localsplus[1];
 } _PyInterpreterFrame;
@@ -111,6 +114,9 @@ _PyFrame_InitializeSpecials(
     frame->prev_instr = _PyCode_CODE(code) - 1;
     frame->is_entry = false;
     frame->owner = FRAME_OWNED_BY_THREAD;
+    frame->lazy_imports = -1;
+    frame->lazy_imports_cache = 0;
+    frame->lazy_imports_cache_seq = -1;
 }
 
 /* Gets the pointer to the locals array

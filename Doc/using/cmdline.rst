@@ -310,6 +310,13 @@ Miscellaneous options
    .. versionadded:: 3.4
 
 
+.. cmdoption:: -L
+
+   Enable lazy imports.
+
+   .. versionadded:: 3.12
+
+
 .. cmdoption:: -O
 
    Remove assert statements and any code conditional on the value of

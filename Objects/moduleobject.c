@@ -599,7 +599,7 @@ _PyModule_ClearDict(PyObject *d)
 
     /* First, clear only names starting with a single underscore */
     pos = 0;
-    while (PyDict_Next(d, &pos, &key, &value)) {
+    while (_PyDict_Next(d, &pos, &key, &value, NULL)) {
         if (value != Py_None && PyUnicode_Check(key)) {
             if (PyUnicode_READ_CHAR(key, 0) == '_' &&
                 PyUnicode_READ_CHAR(key, 1) != '_') {
@@ -619,7 +619,7 @@ _PyModule_ClearDict(PyObject *d)
 
     /* Next, clear all names except for __builtins__ */
     pos = 0;
-    while (PyDict_Next(d, &pos, &key, &value)) {
+    while (_PyDict_Next(d, &pos, &key, &value, NULL)) {
         if (value != Py_None && PyUnicode_Check(key)) {
             if (PyUnicode_READ_CHAR(key, 0) != '_' ||
                 !_PyUnicode_EqualToASCIIString(key, "__builtins__"))

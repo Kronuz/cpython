@@ -683,10 +683,11 @@ class SysModuleTest(unittest.TestCase):
                  "dont_write_bytecode", "no_user_site", "no_site",
                  "ignore_environment", "verbose", "bytes_warning", "quiet",
                  "hash_randomization", "isolated", "dev_mode", "utf8_mode",
-                 "warn_default_encoding", "safe_path", "int_max_str_digits")
+                 "warn_default_encoding", "safe_path", "int_max_str_digits",
+                 "lazy_imports")
         for attr in attrs:
             self.assertTrue(hasattr(sys.flags, attr), attr)
-            attr_type = bool if attr in ("dev_mode", "safe_path") else int
+            attr_type = bool if attr in ("dev_mode", "safe_path", "lazy_imports") else int
             self.assertEqual(type(getattr(sys.flags, attr)), attr_type, attr)
         self.assertTrue(repr(sys.flags))
         self.assertEqual(len(sys.flags), len(attrs))
@@ -1422,7 +1423,7 @@ class SizeofTest(unittest.TestCase):
         def func():
             return sys._getframe()
         x = func()
-        check(x, size('3Pi3c7P2ic??2P'))
+        check(x, size('3Pi3c 8Pi?ch 2P'))
         # function
         def func(): pass
         check(func, size('14Pi'))
@@ -1439,7 +1440,7 @@ class SizeofTest(unittest.TestCase):
             check(bar, size('PP'))
         # generator
         def get_gen(): yield 1
-        check(get_gen(), size('P2P4P4c7P2ic??P'))
+        check(get_gen(), size('P2P4P4c 8Pi?ch P'))
         # iterator
         check(iter('abc'), size('lP'))
         # callable-iterator

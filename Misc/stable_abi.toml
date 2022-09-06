@@ -571,6 +571,8 @@
     added = '3.2'
 [function.PyDict_GetItemWithError]
     added = '3.2'
+[function.PyDict_IsLazyImport]
+    added = '3.12'
 [function.PyDict_Items]
     added = '3.2'
 [function.PyDict_Keys]
@@ -583,6 +585,10 @@
     added = '3.2'
 [function.PyDict_Next]
     added = '3.2'
+[function.PyDict_NextWithError]
+    added = '3.12'
+[function.PyDict_ResolveLazyImports]
+    added = '3.12'
 [function.PyDict_SetItem]
     added = '3.2'
 [function.PyDict_SetItemString]
@@ -875,8 +881,14 @@
     added = '3.2'
 [function.PyImport_ImportModuleNoBlock]
     added = '3.2'
+[function.PyImport_IsLazyImportsEnabled]
+    added = '3.12'
 [function.PyImport_ReloadModule]
     added = '3.2'
+[function.PyImport_SetLazyImports]
+    added = '3.12'
+[function.PyImport_SetLazyImportsInModule]
+    added = '3.12'
 [function.PyInterpreterState_Clear]
     added = '3.2'
 [function.PyInterpreterState_Delete]
@@ -885,6 +897,8 @@
     added = '3.2'
 [function.PyIter_Next]
     added = '3.2'
+[data.PyLazyImport_Type]
+    added = '3.12'
 [data.PyListIter_Type]
     added = '3.2'
 [data.PyListRevIter_Type]

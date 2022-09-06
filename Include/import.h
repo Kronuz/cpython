@@ -86,6 +86,12 @@ PyAPI_FUNC(int) PyImport_AppendInittab(
     PyObject* (*initfunc)(void)
     );
 
+PyAPI_FUNC(int) PyImport_IsLazyImportsEnabled(void);
+PyAPI_FUNC(PyObject *) PyImport_SetLazyImports(
+    PyObject *enabled, PyObject *excluding);
+PyAPI_FUNC(PyObject *) PyImport_SetLazyImportsInModule(
+    PyObject *enabled);
+
 #ifndef Py_LIMITED_API
 #  define Py_CPYTHON_IMPORT_H
 #  include "cpython/import.h"

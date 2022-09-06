@@ -871,6 +871,8 @@ pycore_interp_init(PyThreadState *tstate)
         }
     }
 
+    interp->lazy_imports = config->lazy_imports;
+
 done:
     /* sys.modules['sys'] contains a strong reference to the module */
     Py_XDECREF(sysmod);

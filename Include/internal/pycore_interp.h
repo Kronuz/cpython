@@ -119,12 +119,14 @@ struct _is {
     // sys.modules dictionary
     PyObject *modules;
     PyObject *modules_by_index;
+    PyObject *lazy_modules;
     // Dictionary of the sys module
     PyObject *sysdict;
     // Dictionary of the builtins module
     PyObject *builtins;
     // importlib module
     PyObject *importlib;
+    PyObject *eager_imports;
     // override for config->use_frozen_modules (for tests)
     // (-1: "off", 1: "on", 0: no override)
     int override_frozen_modules;
@@ -193,6 +195,9 @@ struct _is {
 
     /* the initial PyInterpreterState.threads.head */
     PyThreadState _initial_thread;
+
+    /* whether lazy imports was enabled at runtime */
+    int lazy_imports;
 };
 
 

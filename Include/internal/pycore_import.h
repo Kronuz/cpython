@@ -20,6 +20,27 @@ PyAPI_DATA(const struct _frozen *) _PyImport_FrozenStdlib;
 PyAPI_DATA(const struct _frozen *) _PyImport_FrozenTest;
 extern const struct _module_alias * _PyImport_FrozenAliases;
 
+PyAPI_FUNC(PyObject *) _PyImport_LoadLazyImport(PyObject *lazy_object,
+                                                int deep);
+
+PyAPI_FUNC(PyObject *) _PyImport_LazyImportName(PyObject *builtins,
+                                                PyObject *globals,
+                                                PyObject *locals,
+                                                PyObject *name,
+                                                PyObject *fromlist,
+                                                PyObject *level);
+
+PyAPI_FUNC(PyObject *) _PyImport_EagerImportName(PyObject *builtins,
+                                                 PyObject *globals,
+                                                 PyObject *locals,
+                                                 PyObject *name,
+                                                 PyObject *fromlist,
+                                                 PyObject *level);
+
+PyAPI_FUNC(PyObject *) _PyImport_ImportFrom(PyThreadState *tstate,
+                                            PyObject *v,
+                                            PyObject *name);
+
 #ifdef __cplusplus
 }
 #endif

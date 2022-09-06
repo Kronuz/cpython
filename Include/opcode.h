@@ -67,7 +67,7 @@ extern "C" {
 #define BUILD_MAP                              105
 #define LOAD_ATTR                              106
 #define COMPARE_OP                             107
-#define IMPORT_NAME                            108
+#define EAGER_IMPORT_NAME                      108
 #define IMPORT_FROM                            109
 #define JUMP_FORWARD                           110
 #define JUMP_IF_FALSE_OR_POP                   111
@@ -117,6 +117,7 @@ extern "C" {
 #define DICT_UPDATE                            165
 #define CALL                                   171
 #define KW_NAMES                               172
+#define IMPORT_NAME                            183
 #define MIN_PSEUDO_OPCODE                      256
 #define SETUP_FINALLY                          256
 #define SETUP_CLEANUP                          257
