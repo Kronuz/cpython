@@ -1,0 +1,2 @@
+from test.test_lazy_imports.deferred_resolve_failure import type
+from test.test_lazy_imports.deferred_resolve_failure.utilities import type_from_ast

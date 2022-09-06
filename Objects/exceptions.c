@@ -1678,6 +1678,14 @@ ComplexExtendsException(PyExc_Exception, ImportError,
                         "module.");
 
 /*
+ *    ImportCycleError extends ImportError
+ */
+
+
+MiddlingExtendsException(PyExc_ImportError, ImportCycleError, ImportError,
+                         "Import produces a cycle.");
+
+/*
  *    ModuleNotFoundError extends ImportError
  */
 
@@ -3673,6 +3681,7 @@ static struct static_exception static_exceptions[] = {
     ITEM(IndentationError), // base: SyntaxError(Exception)
     ITEM(IndexError),  // base: LookupError(Exception)
     ITEM(KeyError),  // base: LookupError(Exception)
+    ITEM(ImportCycleError), // base: ImportError(Exception)
     ITEM(ModuleNotFoundError), // base: ImportError(Exception)
     ITEM(NotImplementedError),  // base: RuntimeError(Exception)
     ITEM(RecursionError),  // base: RuntimeError(Exception)

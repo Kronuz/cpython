@@ -62,6 +62,30 @@ import warnings
 from ._bootstrap import __import__
 
 
+def is_lazy_imports_enabled():
+    return _imp.is_lazy_imports_enabled()
+
+
+def is_lazy_import(dictionary, key):
+    return _imp.is_lazy_import(dictionary, key)
+
+
+def hydrate_lazy_objects():
+    _imp.hydrate_lazy_objects()
+
+
+def set_lazy_imports(enable = True, /, eager = None):
+    """Programmatic API for enabling lazy imports at runtime.
+
+    The optional argument `eager` can be any container of strings; all imports for
+    which the import full name is present in the container will be imported eagerly.
+    One caveat to be aware is that `importlib.set_lazy_imports(eager={"foo.bar.baz"})`
+    will make `import foo.bar.baz` or `from foo.bar import baz` eager, but not
+    `import foo.bar.baz.plugh`, even if that import would imply importing `foo.bar.baz`.
+    """
+    return _imp._set_lazy_imports(enable, eager=eager)
+
+
 def invalidate_caches():
     """Call the invalidate_caches() method on all meta path finders stored in
     sys.meta_path (where implemented)."""

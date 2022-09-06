@@ -463,6 +463,7 @@ OBJECT_OBJS=	\
 		Objects/funcobject.o \
 		Objects/interpreteridobject.o \
 		Objects/iterobject.o \
+		Objects/lazyimportobject.o \
 		Objects/listobject.o \
 		Objects/longobject.o \
 		Objects/dictobject.o \
@@ -1624,6 +1625,7 @@ PYTHON_HEADERS= \
 		$(srcdir)/Include/interpreteridobject.h \
 		$(srcdir)/Include/intrcheck.h \
 		$(srcdir)/Include/iterobject.h \
+		$(srcdir)/Include/lazyimportobject.h \
 		$(srcdir)/Include/listobject.h \
 		$(srcdir)/Include/longobject.h \
 		$(srcdir)/Include/marshal.h \
@@ -1762,6 +1764,7 @@ PYTHON_HEADERS= \
 		$(srcdir)/Include/internal/pycore_initconfig.h \
 		$(srcdir)/Include/internal/pycore_interp.h \
 		$(srcdir)/Include/internal/pycore_intrinsics.h \
+		$(srcdir)/Include/internal/pycore_lazyimport.h \
 		$(srcdir)/Include/internal/pycore_list.h \
 		$(srcdir)/Include/internal/pycore_long.h \
 		$(srcdir)/Include/internal/pycore_moduleobject.h \
@@ -1829,6 +1832,12 @@ cleantest: all
 .PHONY: test
 test: all
 		$(TESTRUNNER) $(TESTOPTS)
+
+# Run the basic set of regression tests with Lazy Imports.
+# The covered tests is the same as `make test`.
+TESTRUNNERLZ= $(TESTPYTHON) -L $(srcdir)/Tools/scripts/run_tests.py
+test_with_lazy_imports: all platform
+	$(TESTRUNNERLZ) $(TESTOPTS)
 
 # Run the full test suite twice - once without .pyc files, and once with.
 # In the past, we've had problems where bugs in the marshalling or
@@ -2208,6 +2217,28 @@ TESTSUBDIRS=	idlelib/idle_test \
 		test/test_importlib/resources/zipdata02 \
 		test/test_importlib/source \
 		test/test_json \
+		test/test_lazy_imports \
+		test/test_lazy_imports/immediate_set_lazy_import_global \
+		test/test_lazy_imports/circular_import \
+		test/test_lazy_imports/deferred_resolve_failure \
+		test/test_lazy_imports/deferred_resolve_failure/utilities \
+		test/test_lazy_imports/cycle_with_load_global \
+		test/test_lazy_imports/data \
+		test/test_lazy_imports/data/module_same_name_aliased \
+		test/test_lazy_imports/data/versioned \
+		test/test_lazy_imports/data/module_same_name_var_order2 \
+		test/test_lazy_imports/data/metasyntactic \
+		test/test_lazy_imports/data/metasyntactic/plugh \
+		test/test_lazy_imports/data/metasyntactic/foo \
+		test/test_lazy_imports/data/metasyntactic/foo/bar \
+		test/test_lazy_imports/data/metasyntactic/foo/bar/thud \
+		test/test_lazy_imports/data/metasyntactic/foo/bar/baz \
+		test/test_lazy_imports/data/metasyntactic/foo/bar/baz/qux \
+		test/test_lazy_imports/data/metasyntactic/foo/ack \
+		test/test_lazy_imports/data/metasyntactic/waldo \
+		test/test_lazy_imports/data/metasyntactic/waldo/fred \
+		test/test_lazy_imports/data/module_same_name_var_order1 \
+		test/test_lazy_imports/dict_changes_when_loading \
 		test/test_lib2to3 \
 		test/test_lib2to3/data \
 		test/test_lib2to3/data/fixers \

@@ -23,6 +23,7 @@ import unittest
 import warnings
 from contextlib import ExitStack
 from functools import partial
+from importlib import is_lazy_imports_enabled
 from inspect import CO_COROUTINE
 from itertools import product
 from textwrap import dedent
@@ -830,6 +831,7 @@ class BuiltinTest(unittest.TestCase):
         self.assertRaisesRegex(NameError, "name 'superglobal' is not defined",
                                eval, code, ns)
 
+    @unittest.skipIf(is_lazy_imports_enabled(), "Test relevant only when running with lazy imports disabled")
     def test_exec_builtins_mapping_import(self):
         code = compile("import foo.bar", "test", "exec")
         ns = {'__builtins__': types.MappingProxyType({})}

@@ -569,6 +569,9 @@ always available. Unless explicitly noted otherwise, all variables are read-only
       * - .. attribute:: flags.safe_path
         - :option:`-P`
 
+      * - .. attribute:: flags.lazy_imports
+        - :option:`-L`
+
       * - .. attribute:: flags.int_max_str_digits
         - :option:`-X int_max_str_digits <-X>`
           (:ref:`integer string conversion length limitation <int_max_str_digits>`)
@@ -601,6 +604,9 @@ always available. Unless explicitly noted otherwise, all variables are read-only
 
    .. versionchanged:: 3.11
       Added the ``int_max_str_digits`` attribute.
+
+   .. versionchanged:: 3.12
+      Added the ``lazy_imports`` attribute for :option:`-L` option.
 
 
 .. data:: float_info

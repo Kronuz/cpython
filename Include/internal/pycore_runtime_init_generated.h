@@ -650,6 +650,7 @@ extern "C" {
     INIT_ID(__iter__), \
     INIT_ID(__itruediv__), \
     INIT_ID(__ixor__), \
+    INIT_ID(__lazy_submodules__), \
     INIT_ID(__le__), \
     INIT_ID(__len__), \
     INIT_ID(__length_hint__), \
@@ -882,6 +883,7 @@ extern "C" {
     INIT_ID(dst), \
     INIT_ID(dst_dir_fd), \
     INIT_ID(duration), \
+    INIT_ID(eager), \
     INIT_ID(eager_start), \
     INIT_ID(effective_ids), \
     INIT_ID(element_factory), \
@@ -900,6 +902,7 @@ extern "C" {
     INIT_ID(exc_value), \
     INIT_ID(excepthook), \
     INIT_ID(exception), \
+    INIT_ID(excluding), \
     INIT_ID(existing_file_name), \
     INIT_ID(exp), \
     INIT_ID(extend), \
