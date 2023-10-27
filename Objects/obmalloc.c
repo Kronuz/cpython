@@ -1,6 +1,7 @@
 /* Python's malloc wrappers (see pymem.h) */
 
 #include "Python.h"
+#include "pycore_atomic.h"        // _Py_atomic_int
 #include "pycore_code.h"          // stats
 #include "pycore_pystate.h"       // _PyInterpreterState_GET
 
@@ -26,6 +27,56 @@ static void set_up_debug_hooks_unlocked(void);
 static void get_allocator_unlocked(PyMemAllocatorDomain, PyMemAllocatorEx *);
 static void set_allocator_unlocked(PyMemAllocatorDomain, PyMemAllocatorEx *);
 
+typedef struct _obmalloc_state OMState;
+
+static inline int
+has_own_state(PyInterpreterState *interp)
+{
+    return (_Py_IsMainInterpreter(interp) ||
+            !(interp->feature_flags & Py_RTFLAGS_USE_MAIN_OBMALLOC) ||
+            _Py_IsMainInterpreterFinalizing(interp));
+}
+
+static inline OMState *
+get_state(void)
+{
+    PyThreadState *tstate = _PyThreadState_GET();
+    if (tstate == NULL) {
+        return NULL;
+    }
+    PyInterpreterState *interp = tstate->interp;
+    if (!has_own_state(interp)) {
+        interp = _PyInterpreterState_Main();
+    }
+    return &interp->obmalloc;
+}
+
+static _Py_atomic_int stateless_raw_allocated_bytes;
+
+#define raw_allocated_bytes (state == NULL ? &stateless_raw_allocated_bytes : &state->mgmt.raw_allocated_bytes)
+
+
+#ifdef MS_WINDOWS
+#  include <malloc.h>
+#elif defined(__linux__)
+#  include <malloc.h>
+#elif defined(__APPLE__)
+#  include <malloc/malloc.h>
+#endif
+
+static inline size_t
+raw_malloc_size(void *p) {
+    if (p != NULL) {
+#ifdef MS_WINDOWS
+        return _msize(p);
+#elif defined(__linux__)
+        return malloc_usable_size(p);
+#elif defined(__APPLE__)
+        return malloc_size(p);
+#endif
+    }
+    return 0;
+}
 
 /***************************************/
 /* low-level allocator implementations */
@@ -40,9 +91,13 @@ _PyMem_RawMalloc(void *Py_UNUSED(ctx), size_t size)
        for malloc(0), which would be treated as an error. Some platforms would
        return a pointer with no memory behind it, which would break pymalloc.
        To solve these problems, allocate an extra byte. */
+    OMState *state = get_state();
     if (size == 0)
         size = 1;
-    return malloc(size);
+    void* ptr = malloc(size);
+    if (ptr != NULL)
+        _Py_atomic_fetch_add_relaxed(raw_allocated_bytes, raw_malloc_size(ptr));
+    return ptr;
 }
 
 void *
@@ -52,25 +107,39 @@ _PyMem_RawCalloc(void *Py_UNUSED(ctx), size_t nelem, size_t elsize)
        for calloc(0, 0), which would be treated as an error. Some platforms
        would return a pointer with no memory behind it, which would break
        pymalloc.  To solve these problems, allocate an extra byte. */
+    OMState *state = get_state();
     if (nelem == 0 || elsize == 0) {
         nelem = 1;
         elsize = 1;
     }
-    return calloc(nelem, elsize);
+    void* ptr = calloc(nelem, elsize);
+    if (ptr != NULL)
+        _Py_atomic_fetch_add_relaxed(raw_allocated_bytes, raw_malloc_size(ptr));
+    return ptr;
 }
 
 void *
 _PyMem_RawRealloc(void *Py_UNUSED(ctx), void *ptr, size_t size)
 {
+    OMState *state = get_state();
     if (size == 0)
         size = 1;
-    return realloc(ptr, size);
+    size_t oldsize = raw_malloc_size(ptr);
+    ptr = realloc(ptr, size);
+    if (ptr != NULL) {
+        _Py_atomic_fetch_add_relaxed(raw_allocated_bytes, raw_malloc_size(ptr));
+        _Py_atomic_fetch_sub_relaxed(raw_allocated_bytes, oldsize);
+    }
+    return ptr;
 }
 
 void
 _PyMem_RawFree(void *Py_UNUSED(ctx), void *ptr)
 {
+    OMState *state = get_state();
+    size_t size = raw_malloc_size(ptr);
     free(ptr);
+    _Py_atomic_fetch_sub_relaxed(raw_allocated_bytes, size);
 }
 
 #define MALLOC_ALLOC {NULL, _PyMem_RawMalloc, _PyMem_RawCalloc, _PyMem_RawRealloc, _PyMem_RawFree}
@@ -850,25 +919,6 @@ PyObject_Free(void *ptr)
 static int running_on_valgrind = -1;
 #endif
 
-typedef struct _obmalloc_state OMState;
-
-static inline int
-has_own_state(PyInterpreterState *interp)
-{
-    return (_Py_IsMainInterpreter(interp) ||
-            !(interp->feature_flags & Py_RTFLAGS_USE_MAIN_OBMALLOC) ||
-            _Py_IsMainInterpreterFinalizing(interp));
-}
-
-static inline OMState *
-get_state(void)
-{
-    PyInterpreterState *interp = _PyInterpreterState_GET();
-    if (!has_own_state(interp)) {
-        interp = _PyInterpreterState_Main();
-    }
-    return &interp->obmalloc;
-}
 
 // These macros all rely on a local "state" variable.
 #define usedpools (state->pools.used)
@@ -910,6 +960,39 @@ _PyInterpreterState_GetAllocatedBlocks(PyInterpreterState *interp)
         for (; base < (uintptr_t) allarenas[i].pool_address; base += POOL_SIZE) {
             poolp p = (poolp)base;
             n += p->ref.count;
+        }
+    }
+    return n;
+}
+
+Py_ssize_t
+_PyInterpreterState_GetAllocatedBytes(PyInterpreterState *interp)
+{
+#ifdef Py_DEBUG
+    assert(has_own_state(interp));
+#else
+    if (!has_own_state(interp)) {
+        _Py_FatalErrorFunc(__func__,
+                           "the interpreter doesn't have its own allocator");
+    }
+#endif
+    OMState *state = &interp->obmalloc;
+
+    Py_ssize_t n = _Py_atomic_load_relaxed(raw_allocated_bytes);
+    /* add up allocated bytes for used pools */
+    for (uint i = 0; i < maxarenas; ++i) {
+        /* Skip arenas which are not allocated. */
+        if (allarenas[i].address == 0) {
+            continue;
+        }
+
+        uintptr_t base = (uintptr_t)_Py_ALIGN_UP(allarenas[i].address, POOL_SIZE);
+
+        /* visit every pool in the arena */
+        assert(base <= (uintptr_t) allarenas[i].pool_address);
+        for (; base < (uintptr_t) allarenas[i].pool_address; base += POOL_SIZE) {
+            poolp p = (poolp)base;
+            n += (p->ref.count * INDEX2SIZE(p->szidx));
         }
     }
     return n;
@@ -1974,8 +2057,97 @@ _Py_FinalizeAllocatedBlocks(_PyRuntimeState *Py_UNUSED(runtime))
     return;
 }
 
+Py_ssize_t
+_PyInterpreterState_GetAllocatedBytes(PyInterpreterState *interp)
+{
+#ifdef Py_DEBUG
+    assert(has_own_state(interp));
+#else
+    if (!has_own_state(interp)) {
+        _Py_FatalErrorFunc(__func__,
+                           "the interpreter doesn't have its own allocator");
+    }
+#endif
+    OMState *state = &interp->obmalloc;
+
+    return _Py_atomic_load_relaxed(raw_allocated_bytes);
+}
+
+
 #endif /* WITH_PYMALLOC */
 
+static Py_ssize_t
+get_num_global_allocated_bytes(_PyRuntimeState *runtime)
+{
+    Py_ssize_t total = 0;
+    if (_PyRuntimeState_GetFinalizing(runtime) != NULL) {
+        PyInterpreterState *interp = _PyInterpreterState_Main();
+        if (interp == NULL) {
+            /* We are at the very end of runtime finalization.
+               We can't rely on finalizing->interp since that thread
+               state is probably already freed, so we don't worry
+               about it. */
+            assert(PyInterpreterState_Head() == NULL);
+        }
+        else {
+            assert(interp != NULL);
+            /* It is probably the last interpreter but not necessarily. */
+            assert(PyInterpreterState_Next(interp) == NULL);
+            total += _PyInterpreterState_GetAllocatedBytes(interp);
+        }
+    }
+    else {
+        HEAD_LOCK(runtime);
+        PyInterpreterState *interp = PyInterpreterState_Head();
+        assert(interp != NULL);
+#ifdef Py_DEBUG
+        int got_main = 0;
+#endif
+        for (; interp != NULL; interp = PyInterpreterState_Next(interp)) {
+#ifdef Py_DEBUG
+            if (_Py_IsMainInterpreter(interp)) {
+                assert(!got_main);
+                got_main = 1;
+                assert(has_own_state(interp));
+            }
+#endif
+            if (has_own_state(interp)) {
+                total += _PyInterpreterState_GetAllocatedBytes(interp);
+            }
+        }
+        HEAD_UNLOCK(runtime);
+#ifdef Py_DEBUG
+        assert(got_main);
+#endif
+    }
+    total += _Py_atomic_load_relaxed(&stateless_raw_allocated_bytes);
+    total += _Py_atomic_load_relaxed(&runtime->obmalloc.interpreter_leaks_bytes);
+    return total;
+}
+
+Py_ssize_t
+_Py_GetGlobalAllocatedBytes(void)
+{
+    return get_num_global_allocated_bytes(&_PyRuntime);
+}
+
+void
+_PyInterpreterState_FinalizeAllocatedBytes(PyInterpreterState *interp)
+{
+    if (has_own_state(interp)) {
+        Py_ssize_t leaked = _PyInterpreterState_GetAllocatedBytes(interp);
+        assert(has_own_state(interp) || leaked == 0);
+        _Py_atomic_fetch_add_relaxed(&interp->runtime->obmalloc.interpreter_leaks_bytes, leaked);
+    }
+}
+
+static Py_ssize_t get_num_global_allocated_bytes(_PyRuntimeState *);
+
+void
+_Py_FinalizeAllocatedBytes(_PyRuntimeState *runtime)
+{
+    _Py_atomic_store_relaxed(&runtime->obmalloc.interpreter_leaks_bytes, 0);
+}
 
 /*==========================================================================*/
 /* A x-platform debugging allocator.  This doesn't manage memory directly,
