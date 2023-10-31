@@ -1297,7 +1297,7 @@ _ERR_MSG = _ERR_MSG_PREFIX + '{!r}'
 
 def _find_and_load_unlocked(name, import_):
     path = None
-    parent = name.rpartition('.')[0]
+    parent, _, child = name.rpartition('.')
     parent_spec = None
     if parent:
         if parent not in sys.modules:
@@ -1312,7 +1312,6 @@ def _find_and_load_unlocked(name, import_):
             msg = f'{_ERR_MSG_PREFIX}{name!r}; {parent!r} is not a package'
             raise ModuleNotFoundError(msg, name=name) from None
         parent_spec = parent_module.__spec__
-        child = name.rpartition('.')[2]
     spec = _find_spec(name, path)
     if spec is None:
         raise ModuleNotFoundError(f'{_ERR_MSG_PREFIX}{name!r}', name=name)
@@ -1330,10 +1329,16 @@ def _find_and_load_unlocked(name, import_):
         # Set the module as an attribute on its parent.
         parent_module = sys.modules[parent]
         try:
-            setattr(parent_module, child, module)
-        except AttributeError:
-            msg = f"Cannot set an attribute on {parent!r} for child module {child!r}"
+            _imp._maybe_set_parent_attribute(parent_module, child, module, name)
+        except Exception as e:
+            msg = f"Cannot set an attribute on {parent!r} for child module {child!r}: {e!r}"
             _warnings.warn(msg, ImportWarning)
+    # Set attributes to lazy submodules on the module.
+    try:
+        _imp._set_lazy_attributes(module, name)
+    except Exception as e:
+        msg = f"Cannot set lazy attributes on {name!r}: {e!r}"
+        _warnings.warn(msg, ImportWarning)
     return module
 
 
