@@ -8,6 +8,7 @@ extern "C" {
 #  error "this header requires Py_BUILD_CORE define"
 #endif
 
+#include "pycore_atomic.h"        // _Py_atomic_int
 
 typedef unsigned int pymem_uint;  /* assuming >= 16 bits */
 
@@ -502,6 +503,7 @@ struct _obmalloc_mgmt {
     size_t narenas_highwater;
 
     Py_ssize_t raw_allocated_blocks;
+    _Py_atomic_int raw_allocated_bytes;
 };
 
 
@@ -660,6 +662,7 @@ struct _obmalloc_usage {
 struct _obmalloc_global_state {
     int dump_debug_stats;
     Py_ssize_t interpreter_leaks;
+    _Py_atomic_int interpreter_leaks_bytes;
 };
 
 struct _obmalloc_state {
@@ -685,6 +688,11 @@ extern Py_ssize_t _Py_GetGlobalAllocatedBlocks(void);
 extern Py_ssize_t _PyInterpreterState_GetAllocatedBlocks(PyInterpreterState *);
 extern void _PyInterpreterState_FinalizeAllocatedBlocks(PyInterpreterState *);
 
+extern Py_ssize_t _Py_GetGlobalAllocatedBytes(void);
+#define _Py_GetAllocatedBytes() \
+    _Py_GetGlobalAllocatedBytes()
+extern Py_ssize_t _PyInterpreterState_GetAllocatedBytes(PyInterpreterState *);
+extern void _PyInterpreterState_FinalizeAllocatedBytes(PyInterpreterState *);
 
 #ifdef WITH_PYMALLOC
 // Export the symbol for the 3rd party guppy3 project

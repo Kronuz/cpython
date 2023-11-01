@@ -1952,6 +1952,7 @@ Py_FinalizeEx(void)
     _Py_FinalizeRefTotal(runtime);
 #endif
     _Py_FinalizeAllocatedBlocks(runtime);
+    _Py_FinalizeAllocatedBytes(runtime);
 
 #ifdef Py_TRACE_REFS
     /* Display addresses (& refcnts) of all objects still alive.

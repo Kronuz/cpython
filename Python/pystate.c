@@ -966,6 +966,7 @@ PyInterpreterState_Delete(PyInterpreterState *interp)
     _PyInterpreterState_FinalizeRefTotal(interp);
 #endif
     _PyInterpreterState_FinalizeAllocatedBlocks(interp);
+    _PyInterpreterState_FinalizeAllocatedBytes(interp);
 
     HEAD_LOCK(runtime);
     PyInterpreterState **p;
