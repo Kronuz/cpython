@@ -442,6 +442,233 @@ exit:
     return return_value;
 }
 
+PyDoc_STRVAR(_imp_is_lazy_import__doc__,
+"is_lazy_import($module, dict, name, /)\n"
+"--\n"
+"\n"
+"Check if `name` is a lazy import object in `dict`.\n"
+"\n"
+"Returns 1 if `name` in `dict` contains a lazy import object.\n"
+"Returns 0 if `name` in `dict` is not a lazy import object.\n"
+"Returns -1 if `name` doesn\'t exist in `dict`, or an error occurred.");
+
+#define _IMP_IS_LAZY_IMPORT_METHODDEF    \
+    {"is_lazy_import", (PyCFunction)(void(*)(void))_imp_is_lazy_import, METH_FASTCALL, _imp_is_lazy_import__doc__},
+
+static PyObject *
+_imp_is_lazy_import_impl(PyObject *module, PyObject *dict, PyObject *name);
+
+static PyObject *
+_imp_is_lazy_import(PyObject *module, PyObject *const *args, Py_ssize_t nargs)
+{
+    PyObject *return_value = NULL;
+    PyObject *dict;
+    PyObject *name;
+
+    if (!_PyArg_CheckPositional("is_lazy_import", nargs, 2, 2)) {
+        goto exit;
+    }
+    if (!PyDict_Check(args[0])) {
+        _PyArg_BadArgument("is_lazy_import", "argument 1", "dict", args[0]);
+        goto exit;
+    }
+    dict = args[0];
+    if (!PyUnicode_Check(args[1])) {
+        _PyArg_BadArgument("is_lazy_import", "argument 2", "str", args[1]);
+        goto exit;
+    }
+    if (PyUnicode_READY(args[1]) == -1) {
+        goto exit;
+    }
+    name = args[1];
+    return_value = _imp_is_lazy_import_impl(module, dict, name);
+
+exit:
+    return return_value;
+}
+
+PyDoc_STRVAR(_imp__set_lazy_imports__doc__,
+"_set_lazy_imports($module, enabled=True, /,\n"
+"                  excluding=<unrepresentable>, eager=<unrepresentable>)\n"
+"--\n"
+"\n"
+"Programmatic API for enabling lazy imports at runtime.\n"
+"\n"
+"`excluding` is an optional container of module names\n"
+"within which all imports will remain eager.");
+
+#define _IMP__SET_LAZY_IMPORTS_METHODDEF    \
+    {"_set_lazy_imports", (PyCFunction)(void(*)(void))_imp__set_lazy_imports, METH_FASTCALL|METH_KEYWORDS, _imp__set_lazy_imports__doc__},
+
+static PyObject *
+_imp__set_lazy_imports_impl(PyObject *module, PyObject *enabled,
+                            PyObject *excluding, PyObject *eager);
+
+static PyObject *
+_imp__set_lazy_imports(PyObject *module, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames)
+{
+    PyObject *return_value = NULL;
+    static const char * const _keywords[] = {"", "excluding", "eager", NULL};
+    static _PyArg_Parser _parser = {NULL, _keywords, "_set_lazy_imports", 0};
+    PyObject *argsbuf[3];
+    Py_ssize_t noptargs = nargs + (kwnames ? PyTuple_GET_SIZE(kwnames) : 0) - 0;
+    PyObject *enabled = Py_True;
+    PyObject *excluding = NULL;
+    PyObject *eager = NULL;
+
+    args = _PyArg_UnpackKeywords(args, nargs, NULL, kwnames, &_parser, 0, 3, 0, argsbuf);
+    if (!args) {
+        goto exit;
+    }
+    if (nargs < 1) {
+        goto skip_optional_posonly;
+    }
+    noptargs--;
+    enabled = args[0];
+skip_optional_posonly:
+    if (!noptargs) {
+        goto skip_optional_pos;
+    }
+    if (args[1]) {
+        excluding = args[1];
+        if (!--noptargs) {
+            goto skip_optional_pos;
+        }
+    }
+    eager = args[2];
+skip_optional_pos:
+    return_value = _imp__set_lazy_imports_impl(module, enabled, excluding, eager);
+
+exit:
+    return return_value;
+}
+
+PyDoc_STRVAR(_imp_is_lazy_imports_enabled__doc__,
+"is_lazy_imports_enabled($module, /)\n"
+"--\n"
+"\n"
+"Return True is lazy imports is currently enabled.");
+
+#define _IMP_IS_LAZY_IMPORTS_ENABLED_METHODDEF    \
+    {"is_lazy_imports_enabled", (PyCFunction)_imp_is_lazy_imports_enabled, METH_NOARGS, _imp_is_lazy_imports_enabled__doc__},
+
+static PyObject *
+_imp_is_lazy_imports_enabled_impl(PyObject *module);
+
+static PyObject *
+_imp_is_lazy_imports_enabled(PyObject *module, PyObject *Py_UNUSED(ignored))
+{
+    return _imp_is_lazy_imports_enabled_impl(module);
+}
+
+PyDoc_STRVAR(_imp__maybe_set_parent_attribute__doc__,
+"_maybe_set_parent_attribute($module, parent_module, child,\n"
+"                            child_module, name, /)\n"
+"--\n"
+"\n"
+"Sets the module as an attribute on its parent, as a side effect.");
+
+#define _IMP__MAYBE_SET_PARENT_ATTRIBUTE_METHODDEF    \
+    {"_maybe_set_parent_attribute", (PyCFunction)(void(*)(void))_imp__maybe_set_parent_attribute, METH_FASTCALL, _imp__maybe_set_parent_attribute__doc__},
+
+static PyObject *
+_imp__maybe_set_parent_attribute_impl(PyObject *module,
+                                      PyObject *parent_module,
+                                      PyObject *child,
+                                      PyObject *child_module, PyObject *name);
+
+static PyObject *
+_imp__maybe_set_parent_attribute(PyObject *module, PyObject *const *args, Py_ssize_t nargs)
+{
+    PyObject *return_value = NULL;
+    PyObject *parent_module;
+    PyObject *child;
+    PyObject *child_module;
+    PyObject *name;
+
+    if (!_PyArg_CheckPositional("_maybe_set_parent_attribute", nargs, 4, 4)) {
+        goto exit;
+    }
+    parent_module = args[0];
+    if (!PyUnicode_Check(args[1])) {
+        _PyArg_BadArgument("_maybe_set_parent_attribute", "argument 2", "str", args[1]);
+        goto exit;
+    }
+    if (PyUnicode_READY(args[1]) == -1) {
+        goto exit;
+    }
+    child = args[1];
+    child_module = args[2];
+    if (!PyUnicode_Check(args[3])) {
+        _PyArg_BadArgument("_maybe_set_parent_attribute", "argument 4", "str", args[3]);
+        goto exit;
+    }
+    if (PyUnicode_READY(args[3]) == -1) {
+        goto exit;
+    }
+    name = args[3];
+    return_value = _imp__maybe_set_parent_attribute_impl(module, parent_module, child, child_module, name);
+
+exit:
+    return return_value;
+}
+
+PyDoc_STRVAR(_imp__set_lazy_attributes__doc__,
+"_set_lazy_attributes($module, child_module, name, /)\n"
+"--\n"
+"\n"
+"Sets attributes to lazy submodules on the module, as side effects.");
+
+#define _IMP__SET_LAZY_ATTRIBUTES_METHODDEF    \
+    {"_set_lazy_attributes", (PyCFunction)(void(*)(void))_imp__set_lazy_attributes, METH_FASTCALL, _imp__set_lazy_attributes__doc__},
+
+static PyObject *
+_imp__set_lazy_attributes_impl(PyObject *module, PyObject *child_module,
+                               PyObject *name);
+
+static PyObject *
+_imp__set_lazy_attributes(PyObject *module, PyObject *const *args, Py_ssize_t nargs)
+{
+    PyObject *return_value = NULL;
+    PyObject *child_module;
+    PyObject *name;
+
+    if (!_PyArg_CheckPositional("_set_lazy_attributes", nargs, 2, 2)) {
+        goto exit;
+    }
+    child_module = args[0];
+    if (!PyUnicode_Check(args[1])) {
+        _PyArg_BadArgument("_set_lazy_attributes", "argument 2", "str", args[1]);
+        goto exit;
+    }
+    if (PyUnicode_READY(args[1]) == -1) {
+        goto exit;
+    }
+    name = args[1];
+    return_value = _imp__set_lazy_attributes_impl(module, child_module, name);
+
+exit:
+    return return_value;
+}
+
+PyDoc_STRVAR(_imp_hydrate_lazy_objects__doc__,
+"hydrate_lazy_objects($module, /)\n"
+"--\n"
+"\n"
+"Hydrates lazy objects in all modules, from loaded modules.");
+
+#define _IMP_HYDRATE_LAZY_OBJECTS_METHODDEF    \
+    {"hydrate_lazy_objects", (PyCFunction)_imp_hydrate_lazy_objects, METH_NOARGS, _imp_hydrate_lazy_objects__doc__},
+
+static PyObject *
+_imp_hydrate_lazy_objects_impl(PyObject *module);
+
+static PyObject *
+_imp_hydrate_lazy_objects(PyObject *module, PyObject *Py_UNUSED(ignored))
+{
+    return _imp_hydrate_lazy_objects_impl(module);
+}
+
 #ifndef _IMP_CREATE_DYNAMIC_METHODDEF
     #define _IMP_CREATE_DYNAMIC_METHODDEF
 #endif /* !defined(_IMP_CREATE_DYNAMIC_METHODDEF) */
@@ -449,4 +676,4 @@ exit:
 #ifndef _IMP_EXEC_DYNAMIC_METHODDEF
     #define _IMP_EXEC_DYNAMIC_METHODDEF
 #endif /* !defined(_IMP_EXEC_DYNAMIC_METHODDEF) */
-/*[clinic end generated code: output=7c31c433af88af6b input=a9049054013a1b77]*/
+/*[clinic end generated code: output=5646fdf747e424b7 input=a9049054013a1b77]*/

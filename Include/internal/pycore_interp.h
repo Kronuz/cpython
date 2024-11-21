@@ -307,6 +307,12 @@ struct _is {
     struct type_cache type_cache;
 
     int int_max_str_digits;
+
+    /* whether lazy imports was enabled at runtime */
+    int lazy_imports;
+    PyObject *lazy_modules;
+    PyObject *excluding_modules;
+    PyObject *eager_imports;
 };
 
 extern void _PyInterpreterState_ClearModules(PyInterpreterState *interp);

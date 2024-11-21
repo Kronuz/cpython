@@ -209,6 +209,8 @@ typedef struct PyConfig {
     // If non-zero, disallow threads, subprocesses, and fork.
     // Default: 0.
     int _isolated_interpreter;
+
+    int lazy_imports;
 } PyConfig;
 
 PyAPI_FUNC(void) PyConfig_InitPythonConfig(PyConfig *config);

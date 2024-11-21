@@ -1,4 +1,4 @@
-#ifndef Py_CPYTHON_DICTOBJECT_H
+﻿#ifndef Py_CPYTHON_DICTOBJECT_H
 #  error "this header file must not be included directly"
 #endif
 
@@ -82,3 +82,16 @@ typedef struct {
 
 PyAPI_FUNC(PyObject *) _PyDictView_New(PyObject *, PyTypeObject *);
 PyAPI_FUNC(PyObject *) _PyDictView_Intersect(PyObject* self, PyObject *other);
+
+/* Lazy imports */
+
+/* Return 1 if the given dict has deferred objects, or 0 otherwise. */
+PyAPI_FUNC(int) _PyDict_HasDeferredObjects(PyObject *);
+
+/* Flag dictionary as having deferred objects in it */
+PyAPI_FUNC(void) _PyDict_SetHasDeferredObjects(PyObject *);
+
+/* Unflag dictionary as having deferred objects in it */
+PyAPI_FUNC(void) _PyDict_UnsetHasDeferredObjects(PyObject *);
+
+PyAPI_FUNC(Py_ssize_t) PyDict_ResolveLazyImports(PyObject *);

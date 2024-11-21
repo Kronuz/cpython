@@ -1,4 +1,4 @@
-/* Module definition and import interface */
+﻿/* Module definition and import interface */
 
 #ifndef Py_IMPORT_H
 #define Py_IMPORT_H
@@ -57,6 +57,16 @@ PyAPI_FUNC(PyObject *) PyImport_ImportModuleLevel(
     int level
     );
 #if !defined(Py_LIMITED_API) || Py_LIMITED_API+0 >= 0x03050000
+PyAPI_FUNC(int) PyImport_IsLazyImportsEnabled(void);
+PyAPI_FUNC(PyObject *) PyImport_SetLazyImports(
+    PyObject *enabled, PyObject *excluding, PyObject *eager);
+PyObject *
+PyImport_LazyImportModuleLevelObject(
+    PyObject *name,
+    PyObject *globals,
+    PyObject *locals,
+    PyObject *fromlist,
+    int level);
 PyAPI_FUNC(PyObject *) PyImport_ImportModuleLevelObject(
     PyObject *name,
     PyObject *globals,

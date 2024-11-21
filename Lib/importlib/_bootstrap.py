@@ -986,7 +986,7 @@ _ERR_MSG = _ERR_MSG_PREFIX + '{!r}'
 
 def _find_and_load_unlocked(name, import_):
     path = None
-    parent = name.rpartition('.')[0]
+    parent, _, child = name.rpartition('.')
     if parent:
         if parent not in sys.modules:
             _call_with_frames_removed(import_, parent)
@@ -1007,12 +1007,17 @@ def _find_and_load_unlocked(name, import_):
     if parent:
         # Set the module as an attribute on its parent.
         parent_module = sys.modules[parent]
-        child = name.rpartition('.')[2]
         try:
-            setattr(parent_module, child, module)
-        except AttributeError:
-            msg = f"Cannot set an attribute on {parent!r} for child module {child!r}"
+            _imp._maybe_set_parent_attribute(parent_module, child, module, name)
+        except Exception as e:
+            msg = f"Cannot set an attribute on {parent!r} for child module {child!r}: {e!r}"
             _warnings.warn(msg, ImportWarning)
+    # Set attributes to lazy submodules on the module.
+    try:
+        _imp._set_lazy_attributes(module, name)
+    except Exception as e:
+        msg = f"Cannot set lazy attributes on {name!r}: {e!r}"
+        _warnings.warn(msg, ImportWarning)
     return module
 
 
@@ -1021,17 +1026,28 @@ _NEEDS_LOADING = object()
 
 def _find_and_load(name, import_):
     """Find and load the module."""
-    with _ModuleLockManager(name):
-        module = sys.modules.get(name, _NEEDS_LOADING)
-        if module is _NEEDS_LOADING:
-            return _find_and_load_unlocked(name, import_)
+
+    # Optimization: we avoid unneeded module locking if the module
+    # already exists in sys.modules and is fully initialized.
+    module = sys.modules.get(name, _NEEDS_LOADING)
+    if (module is _NEEDS_LOADING or
+        getattr(getattr(module, "__spec__", None), "_initializing", False)):
+        with _ModuleLockManager(name):
+            module = sys.modules.get(name, _NEEDS_LOADING)
+            if module is _NEEDS_LOADING:
+                return _find_and_load_unlocked(name, import_)
+
+        # Optimization: only call _bootstrap._lock_unlock_module() if
+        # module.__spec__._initializing is True.
+        # NOTE: because of this, initializing must be set *before*
+        # putting the new module in sys.modules.
+        _lock_unlock_module(name)
 
     if module is None:
         message = ('import of {} halted; '
                    'None in sys.modules'.format(name))
         raise ModuleNotFoundError(message, name=name)
 
-    _lock_unlock_module(name)
     return module
 
 

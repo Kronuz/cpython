@@ -1,4 +1,4 @@
-
+﻿
 /* System module */
 
 /*
@@ -2561,6 +2561,7 @@ static PyStructSequence_Field flags_fields[] = {
     {"utf8_mode",               "-X utf8"},
     {"warn_default_encoding",   "-X warn_default_encoding"},
     {"int_max_str_digits",      "-X int_max_str_digits"},
+    {"lazy_imports",            "-L"},
     {0}
 };
 
@@ -2568,7 +2569,7 @@ static PyStructSequence_Desc flags_desc = {
     "sys.flags",        /* name */
     flags__doc__,       /* doc */
     flags_fields,       /* fields */
-    17
+    18
 };
 
 static int
@@ -2609,6 +2610,7 @@ set_flags_from_config(PyInterpreterState *interp, PyObject *flags)
     SetFlag(preconfig->utf8_mode);
     SetFlag(config->warn_default_encoding);
     SetFlag(_Py_global_config_int_max_str_digits);
+    SetFlagObj(PyBool_FromLong(config->lazy_imports));
 #undef SetFlagObj
 #undef SetFlag
     return 0;
@@ -3092,6 +3094,12 @@ _PySys_Create(PyThreadState *tstate, PyObject **sysmod_p)
     }
     interp->modules = modules;
 
+    PyObject *lazy_modules = PyDict_New();
+    if (lazy_modules == NULL) {
+        goto error;
+    }
+    interp->lazy_modules = lazy_modules;
+
     PyObject *sysmod = _PyModule_CreateInitialized(&sysmodule, PYTHON_API_VERSION);
     if (sysmod == NULL) {
         return _PyStatus_ERR("failed to create a module object");
@@ -3105,6 +3113,10 @@ _PySys_Create(PyThreadState *tstate, PyObject **sysmod_p)
     interp->sysdict = sysdict;
 
     if (PyDict_SetItemString(sysdict, "modules", interp->modules) < 0) {
+        goto error;
+    }
+
+    if (PyDict_SetItemString(sysdict, "lazy_modules", interp->lazy_modules) < 0) {
         goto error;
     }
 

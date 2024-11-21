@@ -1,4 +1,4 @@
-"""Run Python's test suite in a fast, rigorous way.
+﻿"""Run Python's test suite in a fast, rigorous way.
 
 The defaults are meant to be reasonably thorough, while skipping certain
 tests that can be time-consuming or resource-intensive (e.g. largefile),
@@ -7,6 +7,7 @@ simply passing a -u option to this script.
 
 """
 
+import importlib
 import os
 import sys
 import test.support
@@ -27,6 +28,9 @@ def main(regrtest_args):
             '-bb',                # Warnings about bytes/bytearray
             '-E',                 # Ignore environment variables
             ]
+
+    if importlib.is_lazy_imports_enabled():
+        args.append('-L')
 
     # Allow user-specified interpreter options to override our defaults.
     args.extend(test.support.args_from_interpreter_flags())

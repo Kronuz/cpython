@@ -1,4 +1,4 @@
-/* Python interpreter top-level routines, including init/exit */
+﻿/* Python interpreter top-level routines, including init/exit */
 
 #include "Python.h"
 
@@ -838,6 +838,8 @@ pycore_interp_init(PyThreadState *tstate)
             return _PyStatus_ERR("failed to initialize importlib");
         }
     }
+
+    interp->lazy_imports = config->lazy_imports;
 
 done:
     /* sys.modules['sys'] contains a strong reference to the module */
