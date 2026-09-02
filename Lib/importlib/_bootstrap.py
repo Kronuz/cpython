@@ -424,6 +424,64 @@ class _ModuleLockManager:
         self._lock.release()
 
 
+def _get_module_chain(name):
+    """Return the chain of dotted-name prefixes from root to leaf.
+
+    For example: 'a.b.c' -> ['a', 'a.b', 'a.b.c']
+    """
+    parts = name.split('.')
+    return ['.'.join(parts[:i+1]) for i in range(len(parts))]
+
+
+class _HierarchicalLockManager:
+    """Manages acquisition of multiple module locks in hierarchical order.
+
+    This prevents deadlocks by ensuring all threads acquire locks in the
+    same order (parent modules before child modules).
+    """
+
+    def __init__(self, name):
+        self._name = name
+        self._module_chain = _get_module_chain(name)
+        self._locks = []
+
+    def __enter__(self):
+        try:
+            for module_name in self._module_chain:
+                # Only acquire lock if module is not already fully loaded
+                module = sys.modules.get(module_name)
+                if (module is None or
+                    getattr(getattr(module, "__spec__", None),
+                            "_initializing", False)):
+                    lock = _get_module_lock(module_name)
+                    try:
+                        lock.acquire()
+                    except _DeadlockError:
+                        if module_name == self._name:
+                            raise
+                        # The parent is being initialised by a thread that
+                        # is (transitively) waiting on a lock we hold.
+                        # Apply the same policy as _lock_unlock_module():
+                        # accept a partially-initialised parent for circular
+                        # imports rather than failing the whole chain.
+                        continue
+                    self._locks.append((module_name, lock))
+        except:
+            # __exit__ is not called when __enter__ raises (e.g. _DeadlockError
+            # on the leaf lock, or KeyboardInterrupt), so release whatever we
+            # already hold to avoid permanently leaking held module locks.
+            for module_name, lock in reversed(self._locks):
+                lock.release()
+            self._locks.clear()
+            raise
+        return self
+
+    def __exit__(self, *args, **kwargs):
+        for module_name, lock in reversed(self._locks):
+            lock.release()
+        self._locks.clear()
+
+
 # The following two functions are for consumption by Python/import.c.
 
 def _get_module_lock(name):
@@ -1305,7 +1363,7 @@ def _sanity_check(name, package, level):
 
 _ERR_MSG_PREFIX = 'No module named '
 
-def _find_and_load_unlocked(name, import_):
+def _find_and_load_unlocked(name, import_, *, lazy_submodule=False):
     path = None
     parent = name.rpartition('.')[0]
     parent_spec = None
@@ -1320,6 +1378,8 @@ def _find_and_load_unlocked(name, import_):
         try:
             path = parent_module.__path__
         except AttributeError:
+            if lazy_submodule:
+                return None
             msg = f'{_ERR_MSG_PREFIX}{name!r}; {parent!r} is not a package'
             raise ModuleNotFoundError(msg, name=name) from None
         parent_spec = parent_module.__spec__
@@ -1332,6 +1392,8 @@ def _find_and_load_unlocked(name, import_):
         child = name.rpartition('.')[2]
     spec = _find_spec(name, path)
     if spec is None:
+        if lazy_submodule:
+            return None
         raise ModuleNotFoundError(f'{_ERR_MSG_PREFIX}{name!r}', name=name)
     else:
         if parent_spec:
@@ -1351,13 +1413,19 @@ def _find_and_load_unlocked(name, import_):
         except AttributeError:
             msg = f"Cannot set an attribute on {parent!r} for child module {child!r}"
             _warnings.warn(msg, ImportWarning)
+    # Set attributes to lazy submodules on the module.
+    try:
+        _imp._set_lazy_attributes(module, name)
+    except Exception as e:
+        msg = f"Cannot set lazy attributes on {name!r}: {e!r}"
+        _warnings.warn(msg, ImportWarning)
     return module
 
 
 _NEEDS_LOADING = object()
 
 
-def _find_and_load(name, import_):
+def _find_and_load(name, import_, *, lazy_submodule=False):
     """Find and load the module."""
 
     # Optimization: we avoid unneeded module locking if the module
@@ -1365,10 +1433,17 @@ def _find_and_load(name, import_):
     module = sys.modules.get(name, _NEEDS_LOADING)
     if (module is _NEEDS_LOADING or
         getattr(getattr(module, "__spec__", None), "_initializing", False)):
-        with _ModuleLockManager(name):
+
+        if '.' in name:
+            lock_manager = _HierarchicalLockManager(name)
+        else:
+            lock_manager = _ModuleLockManager(name)
+
+        with lock_manager:
             module = sys.modules.get(name, _NEEDS_LOADING)
             if module is _NEEDS_LOADING:
-                return _find_and_load_unlocked(name, import_)
+                return _find_and_load_unlocked(
+                    name, import_, lazy_submodule=lazy_submodule)
 
         # Optimization: only call _bootstrap._lock_unlock_module() if
         # module.__spec__._initializing is True.
@@ -1382,13 +1457,17 @@ def _find_and_load(name, import_):
         # to preserve normal semantics: the caller gets the exception from
         # the actual import failure rather than a synthetic error.
         if sys.modules.get(name) is not module:
-            return _find_and_load(name, import_)
+            return _find_and_load(name, import_, lazy_submodule=lazy_submodule)
 
     if module is None:
         message = f'import of {name} halted; None in sys.modules'
         raise ModuleNotFoundError(message, name=name)
 
     return module
+
+
+def _find_and_load_lazy_submodule(name, import_):
+    return _find_and_load(name, import_, lazy_submodule=True)
 
 
 def _gcd_import(name, package=None, level=0):

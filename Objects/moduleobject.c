@@ -6,6 +6,7 @@
 #include "pycore_fileutils.h"     // _Py_wgetcwd
 #include "pycore_import.h"        // _PyImport_GetNextModuleIndex()
 #include "pycore_interp.h"        // PyInterpreterState.importlib
+#include "pycore_lazyimportobject.h" // _PyLazyImportObject_Check()
 #include "pycore_long.h"          // _PyLong_GetOne()
 #include "pycore_modsupport.h"    // _PyModule_CreateInitialized()
 #include "pycore_moduleobject.h"  // _PyModule_GetDef()
@@ -17,7 +18,6 @@
 #include "pycore_weakref.h"       // FT_CLEAR_WEAKREFS()
 
 #include "osdefs.h"               // MAXPATHLEN
-
 
 #define _PyModule_CAST(op) \
     (assert(PyModule_Check(op)), _Py_CAST(PyModuleObject*, (op)))
@@ -106,11 +106,40 @@ new_module_notrack(PyTypeObject *mt)
     return m;
 }
 
+/* Module dict watcher callback.
+ * When a module dictionary is modified, we need to clear the keys version
+ * to invalidate any cached lookups that depend on the dictionary structure.
+ */
+static int
+module_dict_watcher(PyDict_WatchEvent event, PyObject *dict,
+                    PyObject *key, PyObject *new_value)
+{
+    assert(PyDict_Check(dict));
+    // Only if a new lazy object shows up do we need to clear the dictionary. If
+    // this is adding a new key then the version will be reset anyway.
+    if (event == PyDict_EVENT_MODIFIED &&
+        new_value != NULL &&
+        PyLazyImport_CheckExact(new_value)) {
+        _PyDict_ClearKeysVersionLockHeld(dict);
+    }
+    return 0;
+}
+
+int
+_PyModule_InitModuleDictWatcher(PyInterpreterState *interp)
+{
+    // This is a reserved watcher for CPython so there's no need to check for non-NULL.
+    assert(interp->dict_state.watchers[MODULE_WATCHER_ID] == NULL);
+    interp->dict_state.watchers[MODULE_WATCHER_ID] = &module_dict_watcher;
+    return 0;
+}
+
 static void
 track_module(PyModuleObject *m)
 {
     _PyDict_EnablePerThreadRefcounting(m->md_dict);
     _PyObject_SetDeferredRefcount((PyObject *)m);
+    PyDict_Watch(MODULE_WATCHER_ID, m->md_dict);
     PyObject_GC_Track(m);
 }
 
@@ -983,6 +1012,34 @@ _PyModule_IsPossiblyShadowing(PyObject *origin)
     return result;
 }
 
+static PyObject *
+try_load_lazy_submodule(PyModuleObject *m, PyObject *name)
+{
+    PyObject *mod_name;
+    int rc = PyDict_GetItemRef(m->md_dict, &_Py_ID(__name__), &mod_name);
+    if (rc <= 0) {
+        return NULL;
+    }
+    if (!PyUnicode_Check(mod_name)) {
+        Py_DECREF(mod_name);
+        return NULL;
+    }
+    PyObject *result = NULL;
+    _PyLazySubmoduleImportResult status =
+        _PyImport_TryLoadLazySubmodule(mod_name, name, &result);
+    Py_DECREF(mod_name);
+    if (status != _Py_LAZY_SUBMODULE_LOADED) {
+        assert(status == _Py_LAZY_SUBMODULE_ERROR ||
+               status == _Py_LAZY_SUBMODULE_NOT_FOUND);
+        return NULL;
+    }
+    if (PyDict_SetItem(m->md_dict, name, result) < 0) {
+        Py_DECREF(result);
+        return NULL;
+    }
+    return result;
+}
+
 PyObject*
 _Py_module_getattro_impl(PyModuleObject *m, PyObject *name, int suppress)
 {
@@ -990,6 +1047,47 @@ _Py_module_getattro_impl(PyModuleObject *m, PyObject *name, int suppress)
     PyObject *attr, *mod_name, *getattr;
     attr = _PyObject_GenericGetAttrWithDict((PyObject *)m, name, NULL, suppress);
     if (attr) {
+        if (PyLazyImport_CheckExact(attr)) {
+            // gh-144957: Module __getattr__ should get a chance to provide
+            // the attribute before resolving a lazy import placeholder.
+            if (PyDict_GetItemRef(m->md_dict, &_Py_ID(__getattr__), &getattr) < 0) {
+                Py_DECREF(attr);
+                return NULL;
+            }
+            if (getattr) {
+                PyObject *result = PyObject_CallOneArg(getattr, name);
+                Py_DECREF(getattr);
+                if (result != NULL) {
+                    Py_DECREF(attr);
+                    return result;
+                }
+                if (!PyErr_ExceptionMatches(PyExc_AttributeError)) {
+                    Py_DECREF(attr);
+                    return NULL;
+                }
+                PyErr_Clear();
+            }
+            PyObject *new_value = _PyImport_LoadLazyImportTstate(
+                PyThreadState_GET(), attr);
+            if (new_value == NULL) {
+                if (suppress &&
+                    PyErr_ExceptionMatches(PyExc_ImportCycleError)) {
+                    // ImportCycleError is raised when a lazy object tries
+                    // to import itself. In this case, the error should not
+                    // propagate to the caller and instead treated as if the
+                    // attribute doesn't exist.
+                    PyErr_Clear();
+                }
+                Py_DECREF(attr);
+                return NULL;
+            }
+
+            if (PyDict_SetItem(m->md_dict, name, new_value) < 0) {
+                Py_CLEAR(new_value);
+            }
+            Py_DECREF(attr);
+            return new_value;
+        }
         return attr;
     }
     if (suppress == 1) {
@@ -1006,6 +1104,13 @@ _Py_module_getattro_impl(PyModuleObject *m, PyObject *name, int suppress)
         PyErr_Clear();
     }
     assert(m->md_dict != NULL);
+    attr = try_load_lazy_submodule(m, name);
+    if (attr != NULL) {
+        return attr;
+    }
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
     if (PyDict_GetItemRef(m->md_dict, &_Py_ID(__getattr__), &getattr) < 0) {
         return NULL;
     }
@@ -1187,7 +1292,12 @@ static PyObject *
 module_dir(PyObject *self, PyObject *args)
 {
     PyObject *result = NULL;
-    PyObject *dict = PyObject_GetAttr(self, &_Py_ID(__dict__));
+    PyObject *dict;
+    if (PyModule_CheckExact(self)) {
+        dict = Py_NewRef(((PyModuleObject *)self)->md_dict);
+    } else {
+        dict = PyObject_GetAttr(self, &_Py_ID(__dict__));
+    }
 
     if (dict != NULL) {
         if (PyDict_Check(dict)) {
@@ -1215,7 +1325,7 @@ static PyMethodDef module_methods[] = {
 };
 
 static PyObject *
-module_get_dict(PyModuleObject *m)
+module_load_dict(PyModuleObject *m)
 {
     PyObject *dict = PyObject_GetAttr((PyObject *)m, &_Py_ID(__dict__));
     if (dict == NULL) {
@@ -1234,7 +1344,7 @@ module_get_annotate(PyObject *self, void *Py_UNUSED(ignored))
 {
     PyModuleObject *m = _PyModule_CAST(self);
 
-    PyObject *dict = module_get_dict(m);
+    PyObject *dict = module_load_dict(m);
     if (dict == NULL) {
         return NULL;
     }
@@ -1259,7 +1369,7 @@ module_set_annotate(PyObject *self, PyObject *value, void *Py_UNUSED(ignored))
         return -1;
     }
 
-    PyObject *dict = module_get_dict(m);
+    PyObject *dict = module_load_dict(m);
     if (dict == NULL) {
         return -1;
     }
@@ -1289,7 +1399,7 @@ module_get_annotations(PyObject *self, void *Py_UNUSED(ignored))
 {
     PyModuleObject *m = _PyModule_CAST(self);
 
-    PyObject *dict = module_get_dict(m);
+    PyObject *dict = module_load_dict(m);
     if (dict == NULL) {
         return NULL;
     }
@@ -1360,7 +1470,7 @@ module_set_annotations(PyObject *self, PyObject *value, void *Py_UNUSED(ignored)
 {
     PyModuleObject *m = _PyModule_CAST(self);
 
-    PyObject *dict = module_get_dict(m);
+    PyObject *dict = module_load_dict(m);
     if (dict == NULL) {
         return -1;
     }
@@ -1388,7 +1498,6 @@ module_set_annotations(PyObject *self, PyObject *value, void *Py_UNUSED(ignored)
     Py_DECREF(dict);
     return ret;
 }
-
 
 static PyGetSetDef module_getsets[] = {
     {"__annotations__", module_get_annotations, module_set_annotations},

@@ -89,6 +89,8 @@ class TestUtils(TestCase):
             ("obj.list", [(".", "op")]),
             ("obj.match", [(".", "op")]),
             ("b. \\\n format", [(".", "op")]),
+            ("lazy", []),
+            ("lazy()", [('(', 'op'), (')', 'op')]),
             # highlights
             ("set", [("set", "builtin")]),
             ("list", [("list", "builtin")]),
@@ -107,6 +109,36 @@ class TestUtils(TestCase):
                     ("match", "soft_keyword"),
                     ("-", "op"),
                     ("1", "number"),
+                ],
+            ),
+            (
+                "    lazy import",
+                [("lazy", "soft_keyword"), ("import", "keyword")],
+            ),
+            (
+                "lazy from cool_people import pablo",
+                [
+                    ("lazy", "soft_keyword"),
+                    ("from", "keyword"),
+                    ("import", "keyword"),
+                ],
+            ),
+            (
+                "if sad: lazy import happy",
+                [
+                    ("if", "keyword"),
+                    (":", "op"),
+                    ("lazy", "soft_keyword"),
+                    ("import", "keyword"),
+                ],
+            ),
+            (
+                "pass; lazy import z",
+                [
+                    ("pass", "keyword"),
+                    (";", "op"),
+                    ("lazy", "soft_keyword"),
+                    ("import", "keyword"),
                 ],
             ),
         ]

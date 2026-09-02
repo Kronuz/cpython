@@ -4737,6 +4737,14 @@ _PyDict_SizeOf_LockHeld(PyDictObject *mp)
     return (Py_ssize_t)res;
 }
 
+void
+_PyDict_ClearKeysVersionLockHeld(PyObject *mp)
+{
+    ASSERT_DICT_LOCKED(mp);
+
+    FT_ATOMIC_STORE_UINT32_RELAXED(((PyDictObject *)mp)->ma_keys->dk_version, 0);
+}
+
 Py_ssize_t
 _PyDict_SizeOf(PyDictObject *mp)
 {
@@ -7757,8 +7765,8 @@ PyDict_AddWatcher(PyDict_WatchCallback callback)
 
     FT_MUTEX_LOCK_FLAGS(&interp->dict_state.watcher_mutex,
                         _Py_LOCK_DONT_DETACH);
-    /* Start at 2, as 0 and 1 are reserved for CPython */
-    for (int i = 2; i < DICT_MAX_WATCHERS; i++) {
+    /* Some watchers are reserved for CPython, start at the first available one */
+    for (int i = FIRST_AVAILABLE_WATCHER; i < DICT_MAX_WATCHERS; i++) {
         if (!interp->dict_state.watchers[i]) {
             FT_ATOMIC_STORE_PTR_RELEASE(interp->dict_state.watchers[i], callback);
             watcher_id = i;

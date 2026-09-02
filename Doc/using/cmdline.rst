@@ -676,6 +676,13 @@ Miscellaneous options
 
      .. versionadded:: 3.14
 
+   * :samp:`-X lazy_imports={all,normal}` controls lazy import behavior.
+     ``all`` makes all imports lazy by default, and ``normal`` (the default)
+     respects the ``lazy`` keyword in source code.
+     See also :envvar:`PYTHON_LAZY_IMPORTS`.
+
+     .. versionadded:: next
+
    It also allows passing arbitrary values and retrieving them through the
    :data:`sys._xoptions` dictionary.
 
@@ -1325,6 +1332,16 @@ conflict.
    See also the :option:`-X tlbc <-X>` command-line option.
 
    .. versionadded:: 3.14
+
+.. envvar:: PYTHON_LAZY_IMPORTS
+
+   Controls lazy import behavior. Accepts two values: ``all`` makes all
+   imports lazy by default, and ``normal`` (the default) respects the
+   ``lazy`` keyword in source code.
+
+   See also the :option:`-X lazy_imports <-X>` command-line option.
+
+   .. versionadded:: next
 
 Debug-mode variables
 ~~~~~~~~~~~~~~~~~~~~
