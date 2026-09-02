@@ -269,14 +269,63 @@ struct gc_generation {
                   generations */
 };
 
-/* Running stats per generation */
-struct gc_generation_stats {
+/* Stock 3.13's three counters.  The generation_counters[] array below keeps
+   this type and therefore its original 24 bytes at its original offset, so
+   that _gc_runtime_state's layout is byte-identical to an unpatched build.
+   It is still maintained, so an extension compiled against stock headers
+   that reads it keeps reading correct values. */
+struct gc_generation_counters {
     /* total number of collections */
     Py_ssize_t collections;
     /* total number of collected objects */
     Py_ssize_t collected;
     /* total number of uncollectable objects (put into gc.garbage) */
     Py_ssize_t uncollectable;
+};
+
+/* Running stats per generation */
+struct gc_generation_stats {
+    PyTime_t ts_start;
+    PyTime_t ts_stop;
+    /* total number of collections */
+    Py_ssize_t collections;
+    /* total number of collected objects */
+    Py_ssize_t collected;
+    /* total number of uncollectable objects (put into gc.garbage) */
+    Py_ssize_t uncollectable;
+    // Total number of objects considered for collection and traversed:
+    Py_ssize_t candidates;
+    // Total duration of the collection in seconds:
+    double duration;
+    /* heap_size on the start of the collection */
+    Py_ssize_t heap_size;
+};
+
+#ifdef Py_GIL_DISABLED
+#define GC_YOUNG_STATS_SIZE 1
+#define GC_OLD_STATS_SIZE 1
+#else
+#define GC_YOUNG_STATS_SIZE 11
+#define GC_OLD_STATS_SIZE 3
+#endif
+struct gc_young_stats_buffer {
+    struct gc_generation_stats items[GC_YOUNG_STATS_SIZE];
+    int8_t index;
+};
+
+struct gc_old_stats_buffer {
+    struct gc_generation_stats items[GC_OLD_STATS_SIZE];
+    int8_t index;
+};
+
+/* Ring buffers of per-collection statistics, published to external readers.
+   Upstream 3.15 keeps a struct gc_stats* here in _gc_runtime_state; this tree
+   heap-allocates one too, but hangs the pointer off the tail of
+   PyInterpreterState instead -- see the Deviations note in
+   patches/gc-stats.patch for why _gc_runtime_state cannot carry it. */
+struct gc_stats {
+    struct gc_young_stats_buffer young;
+    struct gc_old_stats_buffer old[2];
 };
 
 struct _gc_runtime_state {
@@ -294,7 +343,7 @@ struct _gc_runtime_state {
     PyGC_Head *generation0;
     /* a permanent generation which won't be collected */
     struct gc_generation permanent_generation;
-    struct gc_generation_stats generation_stats[NUM_GENERATIONS];
+    struct gc_generation_counters generation_counters[NUM_GENERATIONS];
     /* true if we are currently running the collector */
     int collecting;
     /* list of uncollectable objects */

@@ -55,6 +55,7 @@ struct collection_state {
     GCState *gcstate;
     Py_ssize_t collected;
     Py_ssize_t uncollectable;
+    Py_ssize_t candidates;
     Py_ssize_t long_lived_total;
     struct worklist unreachable;
     struct worklist legacy_finalizers;
@@ -401,6 +402,9 @@ update_refs(const mi_heap_t *heap, const mi_heap_area_t *area,
         gc_clear_unreachable(op);
         return true;
     }
+
+    // Marked objects count as candidates, immortals don't:
+    ((struct collection_state *)args)->candidates++;
 
     Py_ssize_t refcount = Py_REFCNT(op);
     refcount -= _PyObject_HasDeferredRefcount(op);
@@ -786,6 +790,11 @@ _PyGC_Init(PyInterpreterState *interp)
         return _PyStatus_NO_MEMORY();
     }
 
+    interp->generation_stats = PyMem_RawCalloc(1, sizeof(struct gc_stats));
+    if (interp->generation_stats == NULL) {
+        return _PyStatus_NO_MEMORY();
+    }
+
     return _PyStatus_OK();
 }
 
@@ -999,7 +1008,8 @@ handle_resurrected_objects(struct collection_state *state)
 static void
 invoke_gc_callback(PyThreadState *tstate, const char *phase,
                    int generation, Py_ssize_t collected,
-                   Py_ssize_t uncollectable)
+                   Py_ssize_t uncollectable, Py_ssize_t candidates,
+                   double duration)
 {
     assert(!_PyErr_Occurred(tstate));
 
@@ -1013,10 +1023,12 @@ invoke_gc_callback(PyThreadState *tstate, const char *phase,
     assert(PyList_CheckExact(gcstate->callbacks));
     PyObject *info = NULL;
     if (PyList_GET_SIZE(gcstate->callbacks) != 0) {
-        info = Py_BuildValue("{sisnsn}",
+        info = Py_BuildValue("{sisnsnsnsd}",
             "generation", generation,
             "collected", collected,
-            "uncollectable", uncollectable);
+            "uncollectable", uncollectable,
+            "candidates", candidates,
+            "duration", duration);
         if (info == NULL) {
             PyErr_FormatUnraisable("Exception ignored on invoking gc callbacks");
             return;
@@ -1204,6 +1216,22 @@ gc_collect_internal(PyInterpreterState *interp, struct collection_state *state, 
 
 /* This is the main function.  Read this to understand how the
  * collection process works. */
+/* The free-threaded build has no per-generation ring: GC_YOUNG_STATS_SIZE and
+   GC_OLD_STATS_SIZE are both 1, so each generation keeps a single slot that a
+   remote reader always finds in place. */
+static struct gc_generation_stats *
+get_stats(struct gc_stats *ring, int gen)
+{
+    if (gen == 0) {
+        struct gc_young_stats_buffer *buffer = &ring->young;
+        return &buffer->items[buffer->index];
+    }
+    else {
+        struct gc_old_stats_buffer *buffer = &ring->old[gen - 1];
+        return &buffer->items[buffer->index];
+    }
+}
+
 static Py_ssize_t
 gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
 {
@@ -1239,15 +1267,16 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     GC_STAT_ADD(generation, collections, 1);
 
     if (reason != _Py_GC_REASON_SHUTDOWN) {
-        invoke_gc_callback(tstate, "start", generation, 0, 0);
+        invoke_gc_callback(tstate, "start", generation, 0, 0, 0, 0.0);
     }
 
     if (gcstate->debug & _PyGC_DEBUG_STATS) {
         PySys_WriteStderr("gc: collecting generation %d...\n", generation);
         show_stats_each_generations(gcstate);
-        // ignore error: don't interrupt the GC if reading the clock fails
-        (void)PyTime_PerfCounterRaw(&t1);
     }
+
+    // ignore error: don't interrupt the GC if reading the clock fails
+    (void)PyTime_PerfCounterRaw(&t1);
 
     if (PyDTrace_GC_START_ENABLED()) {
         PyDTrace_GC_START(generation);
@@ -1265,13 +1294,13 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     m = state.collected;
     n = state.uncollectable;
 
+    PyTime_t t2;
+    (void)PyTime_PerfCounterRaw(&t2);
+    double duration = PyTime_AsSecondsDouble(t2 - t1);
     if (gcstate->debug & _PyGC_DEBUG_STATS) {
-        PyTime_t t2;
-        (void)PyTime_PerfCounterRaw(&t2);
-        double d = PyTime_AsSecondsDouble(t2 - t1);
         PySys_WriteStderr(
             "gc: done, %zd unreachable, %zd uncollectable, %.4fs elapsed\n",
-            n+m, n, d);
+            n+m, n, duration);
     }
 
     // Clear the current thread's free-list again.
@@ -1288,10 +1317,24 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     }
 
     /* Update stats */
-    struct gc_generation_stats *stats = &gcstate->generation_stats[generation];
+    struct gc_generation_counters *legacy = &gcstate->generation_counters[generation];
+    legacy->collections++;
+    legacy->collected += m;
+    legacy->uncollectable += n;
+
+    struct gc_generation_stats *stats = get_stats(interp->generation_stats, generation);
+    stats->ts_start = t1;
+    /* Strictly later, as in gc.c's add_stats(): readers treat
+       ts_start < ts_stop as a finished collection, and a zero-duration
+       collection is real.  This build keeps one slot per generation, so
+       an unclamped stop hides the generation outright rather than
+       merely serving a stale slot. */
+    stats->ts_stop = (t2 > t1) ? t2 : t1 + 1;
     stats->collections++;
     stats->collected += m;
     stats->uncollectable += n;
+    stats->duration += duration;
+    stats->candidates += state.candidates;
 
     GC_STAT_ADD(generation, objects_collected, m);
 #ifdef Py_STATS
@@ -1307,7 +1350,7 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     }
 
     if (reason != _Py_GC_REASON_SHUTDOWN) {
-        invoke_gc_callback(tstate, "stop", generation, m, n);
+        invoke_gc_callback(tstate, "stop", generation, m, n, state.candidates, duration);
     }
 
     assert(!_PyErr_Occurred(tstate));
@@ -1622,6 +1665,8 @@ _PyGC_Fini(PyInterpreterState *interp)
     GCState *gcstate = &interp->gc;
     Py_CLEAR(gcstate->garbage);
     Py_CLEAR(gcstate->callbacks);
+    PyMem_RawFree(interp->generation_stats);
+    interp->generation_stats = NULL;
 
     /* We expect that none of this interpreters objects are shared
        with other interpreters.

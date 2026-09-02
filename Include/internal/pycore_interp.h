@@ -277,6 +277,15 @@ struct _is {
     Py_ssize_t _interactive_src_count;
     // In 3.14+ this is interp->threads.preallocated.
     _PyThreadStateImpl *threads_preallocated;
+
+    /* Heap-allocated ring of per-collection GC statistics, published to
+       external readers.  Upstream 3.15 keeps this pointer in _gc_runtime_state
+       (interp->gc); this tree cannot, because _gc_runtime_state sits mid-struct
+       with sixty-one members after it, so growing it would move every one of
+       their offsets.  Appended at the very tail of PyInterpreterState instead,
+       which grows sizeof(PyInterpreterState) by one pointer and moves nothing.
+       See the Deviations note in patches/gc-stats.patch. */
+    struct gc_stats *generation_stats;
 };
 
 
