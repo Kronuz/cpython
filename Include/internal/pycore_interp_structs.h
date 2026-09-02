@@ -178,15 +178,12 @@ struct gc_generation {
                   generations */
 };
 
-struct gc_collection_stats {
-    /* number of collected objects */
-    Py_ssize_t collected;
-    /* total number of uncollectable objects (put into gc.garbage) */
-    Py_ssize_t uncollectable;
-};
-
-/* Running stats per generation */
-struct gc_generation_stats {
+/* Stock 3.14's three counters.  The generation_counters[] array below keeps
+   this type and therefore its original 72 bytes at its original offset, so
+   that _gc_runtime_state's layout is byte-identical to an unpatched build.
+   It is still maintained, so an extension compiled against stock headers
+   that reads it keeps reading correct values. */
+struct gc_generation_counters {
     /* total number of collections */
     Py_ssize_t collections;
     /* total number of collected objects */
@@ -195,9 +192,49 @@ struct gc_generation_stats {
     Py_ssize_t uncollectable;
 };
 
+/* Running stats per generation */
+struct gc_generation_stats {
+    PyTime_t ts_start;
+    PyTime_t ts_stop;
+    /* total number of collections */
+    Py_ssize_t collections;
+    /* total number of collected objects */
+    Py_ssize_t collected;
+    /* total number of uncollectable objects (put into gc.garbage) */
+    Py_ssize_t uncollectable;
+    // Total number of objects considered for collection and traversed:
+    Py_ssize_t candidates;
+    // Total duration of the collection in seconds:
+    double duration;
+    /* heap_size on the start of the collection */
+    Py_ssize_t heap_size;
+};
+
+#ifdef Py_GIL_DISABLED
+#define GC_YOUNG_STATS_SIZE 1
+#define GC_OLD_STATS_SIZE 1
+#else
+#define GC_YOUNG_STATS_SIZE 11
+#define GC_OLD_STATS_SIZE 3
+#endif
+struct gc_young_stats_buffer {
+    struct gc_generation_stats items[GC_YOUNG_STATS_SIZE];
+    int8_t index;
+};
+
+struct gc_old_stats_buffer {
+    struct gc_generation_stats items[GC_OLD_STATS_SIZE];
+    int8_t index;
+};
+
 /* If we change this, we need to change the default value in the
    signature of gc.collect. */
 #define NUM_GENERATIONS 3
+
+struct gc_stats {
+    struct gc_young_stats_buffer young;
+    struct gc_old_stats_buffer old[2];
+};
 
 struct _gc_runtime_state {
     /* List of objects that still need to be cleaned up, singly linked
@@ -219,7 +256,7 @@ struct _gc_runtime_state {
 
     /* a permanent generation which won't be collected */
     struct gc_generation permanent_generation;
-    struct gc_generation_stats generation_stats[NUM_GENERATIONS];
+    struct gc_generation_counters generation_counters[NUM_GENERATIONS];
     /* true if we are currently running the collector */
     int collecting;
     /* list of uncollectable objects */
@@ -230,8 +267,15 @@ struct _gc_runtime_state {
     /* The number of live objects. */
     Py_ssize_t heap_size;
 
-    /* dummy members to preserve other offsets */
-    Py_ssize_t dummy1; /* was work_to_do */
+    /* Ring buffers of per-collection statistics, published to external
+       readers through _Py_DebugOffsets.  This occupies the slot 3.14
+       reserved as dummy1 when it reverted the incremental collector, so it
+       costs no layout change: a pointer and a Py_ssize_t are both eight
+       bytes with eight-byte alignment here. */
+    /* Upstream 3.15 spells this PyInterpreterState.gc.generation_stats
+       and reaches it the same way; see the Provenance note in
+       patches/gc-stats.patch for the one placement difference. */
+    struct gc_stats *generation_stats; /* was dummy1, was work_to_do */
     int dummy2; /* was visited_space */
     int dummy3; /* was phase */
 
@@ -260,6 +304,13 @@ struct _gc_runtime_state {
 
     /* Mutex held for gc_should_collect_mem_usage(). */
     PyMutex mutex;
+    /* Serializes gc.get_stats() (gc_get_stats_impl, the reader) against
+       gc_collect_main()'s stats writer on the free-threaded build so a
+       reader never observes a half-updated record (gh-151646).  Placed
+       after the existing mutex so it lands in this struct's trailing
+       padding: no member moves and _gc_runtime_state stays byte-identical
+       to a stock build. */
+    PyMutex stats_mutex;
 #else
     PyGC_Head *generation0;
 #endif

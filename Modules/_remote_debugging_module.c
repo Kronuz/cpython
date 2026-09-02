@@ -668,6 +668,28 @@ static PyStructSequence_Desc AwaitedInfo_desc = {
     2
 };
 
+// GCStatsInfo structseq type
+static PyStructSequence_Field GCStatsInfo_fields[] = {
+    {"gen", "GC generation number"},
+    {"iid", "Interpreter ID"},
+    {"ts_start", "Raw timestamp at collection start"},
+    {"ts_stop", "Raw timestamp at collection stop"},
+    {"collections", "Total number of collections"},
+    {"collected", "Total number of collected objects"},
+    {"uncollectable", "Total number of uncollectable objects"},
+    {"candidates", "Total objects considered and traversed"},
+    {"heap_size", "Number of live objects"},
+    {"duration", "Total collection time, in seconds"},
+    {NULL}
+};
+
+static PyStructSequence_Desc GCStatsInfo_desc = {
+    "_remote_debugging.GCStatsInfo",
+    "Information about a garbage collector stats sample",
+    GCStatsInfo_fields,
+    10
+};
+
 typedef struct {
     PyObject *func_name;
     PyObject *file_name;
@@ -684,7 +706,29 @@ typedef struct {
     PyTypeObject *CoroInfo_Type;
     PyTypeObject *ThreadInfo_Type;
     PyTypeObject *AwaitedInfo_Type;
+    PyTypeObject *GCStatsInfo_Type;
 } RemoteDebuggingState;
+
+/* Minimal target-process context used by get_gc_stats().
+ *
+ * Reading GC statistics needs nothing but a process handle, the runtime
+ * address and the debug offsets, so it does not pay for the code-object
+ * cache, async offsets and frame machinery a RemoteUnwinderObject carries.
+ * Upstream 3.15 factored the same three fields out as RuntimeOffsets. */
+typedef struct {
+    proc_handle_t handle;
+    uintptr_t runtime_start_address;
+    struct _Py_DebugOffsets debug_offsets;
+    int debug;
+} RuntimeOffsets;
+
+/* Called once per interpreter found in the target process. */
+typedef int (*interpreter_processor_func)(
+    RuntimeOffsets *offsets,
+    uintptr_t interpreter_state_addr,
+    int64_t iid,
+    void *context
+);
 
 typedef struct {
     PyObject_HEAD
@@ -3609,6 +3653,14 @@ _remote_debugging_exec(PyObject *m)
     if (PyModule_AddType(m, st->AwaitedInfo_Type) < 0) {
         return -1;
     }
+
+    st->GCStatsInfo_Type = PyStructSequence_NewType(&GCStatsInfo_desc);
+    if (st->GCStatsInfo_Type == NULL) {
+        return -1;
+    }
+    if (PyModule_AddType(m, st->GCStatsInfo_Type) < 0) {
+        return -1;
+    }
 #ifdef Py_GIL_DISABLED
     PyUnstable_Module_SetGIL(m, Py_MOD_GIL_NOT_USED);
 #endif
@@ -3632,6 +3684,7 @@ remote_debugging_traverse(PyObject *mod, visitproc visit, void *arg)
     Py_VISIT(state->CoroInfo_Type);
     Py_VISIT(state->ThreadInfo_Type);
     Py_VISIT(state->AwaitedInfo_Type);
+    Py_VISIT(state->GCStatsInfo_Type);
     return 0;
 }
 
@@ -3645,6 +3698,7 @@ remote_debugging_clear(PyObject *mod)
     Py_CLEAR(state->CoroInfo_Type);
     Py_CLEAR(state->ThreadInfo_Type);
     Py_CLEAR(state->AwaitedInfo_Type);
+    Py_CLEAR(state->GCStatsInfo_Type);
     return 0;
 }
 
@@ -3652,6 +3706,857 @@ static void
 remote_debugging_free(void *mod)
 {
     (void)remote_debugging_clear((PyObject *)mod);
+}
+
+
+/* ============================================================================
+ * SUBPROCESS ENUMERATION
+ *
+ * Backported verbatim from 3.15's Modules/_remote_debugging/subprocess.c
+ * (GH-142636, 6658e2cb07f).  gcmon calls get_child_pids() to follow a
+ * process tree, and the file is self-contained, so only its #include of the
+ * package header is dropped.
+ * ========================================================================== */
+/******************************************************************************
+ * Remote Debugging Module - Subprocess Enumeration
+ *
+ * This file contains platform-specific functions for enumerating child
+ * processes of a given PID.
+ ******************************************************************************/
+
+
+#ifndef MS_WINDOWS
+#include <unistd.h>
+#include <dirent.h>
+#endif
+
+#ifdef MS_WINDOWS
+#include <tlhelp32.h>
+#endif
+
+/* ============================================================================
+ * INTERNAL DATA STRUCTURES
+ * ============================================================================ */
+
+/* Simple dynamic array for collecting PIDs */
+typedef struct {
+    pid_t *pids;
+    size_t count;
+    size_t capacity;
+} pid_array_t;
+
+static int
+pid_array_init(pid_array_t *arr)
+{
+    arr->capacity = 64;
+    arr->count = 0;
+    arr->pids = (pid_t *)PyMem_Malloc(arr->capacity * sizeof(pid_t));
+    if (arr->pids == NULL) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    return 0;
+}
+
+static void
+pid_array_cleanup(pid_array_t *arr)
+{
+    if (arr->pids != NULL) {
+        PyMem_Free(arr->pids);
+        arr->pids = NULL;
+    }
+    arr->count = 0;
+    arr->capacity = 0;
+}
+
+static int
+pid_array_append(pid_array_t *arr, pid_t pid)
+{
+    if (arr->count >= arr->capacity) {
+        /* Check for overflow before multiplication */
+        if (arr->capacity > SIZE_MAX / 2) {
+            PyErr_SetString(PyExc_OverflowError, "PID array capacity overflow");
+            return -1;
+        }
+        size_t new_capacity = arr->capacity * 2;
+        /* Check allocation size won't overflow */
+        if (new_capacity > SIZE_MAX / sizeof(pid_t)) {
+            PyErr_SetString(PyExc_OverflowError, "PID array size overflow");
+            return -1;
+        }
+        pid_t *new_pids = (pid_t *)PyMem_Realloc(arr->pids, new_capacity * sizeof(pid_t));
+        if (new_pids == NULL) {
+            PyErr_NoMemory();
+            return -1;
+        }
+        arr->pids = new_pids;
+        arr->capacity = new_capacity;
+    }
+    arr->pids[arr->count++] = pid;
+    return 0;
+}
+
+static int
+pid_array_contains(pid_array_t *arr, pid_t pid)
+{
+    for (size_t i = 0; i < arr->count; i++) {
+        if (arr->pids[i] == pid) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* ============================================================================
+ * SHARED BFS HELPER
+ * ============================================================================ */
+
+/* Find child PIDs using BFS traversal of the pid->ppid mapping.
+ * all_pids and ppids must have the same count (parallel arrays).
+ * Returns 0 on success, -1 on error. */
+static int
+find_children_bfs(pid_t target_pid, int recursive,
+                  pid_t *all_pids, pid_t *ppids, size_t pid_count,
+                  pid_array_t *result)
+{
+    int retval = -1;
+    pid_array_t to_process = {0};
+
+    if (pid_array_init(&to_process) < 0) {
+        goto done;
+    }
+    if (pid_array_append(&to_process, target_pid) < 0) {
+        goto done;
+    }
+
+    size_t process_idx = 0;
+    while (process_idx < to_process.count) {
+        pid_t current_pid = to_process.pids[process_idx++];
+
+        for (size_t i = 0; i < pid_count; i++) {
+            if (ppids[i] != current_pid) {
+                continue;
+            }
+            pid_t child_pid = all_pids[i];
+            if (pid_array_contains(result, child_pid)) {
+                continue;
+            }
+            if (pid_array_append(result, child_pid) < 0) {
+                goto done;
+            }
+            if (recursive && pid_array_append(&to_process, child_pid) < 0) {
+                goto done;
+            }
+        }
+
+        if (!recursive) {
+            break;
+        }
+    }
+
+    retval = 0;
+
+done:
+    pid_array_cleanup(&to_process);
+    return retval;
+}
+
+/* ============================================================================
+ * LINUX IMPLEMENTATION
+ * ============================================================================ */
+
+#if defined(__linux__)
+
+/* Parse /proc/{pid}/stat to get parent PID */
+static pid_t
+get_ppid_linux(pid_t pid)
+{
+    char stat_path[64];
+    char buffer[2048];
+
+    snprintf(stat_path, sizeof(stat_path), "/proc/%d/stat", (int)pid);
+
+    int fd = open(stat_path, O_RDONLY);
+    if (fd == -1) {
+        return -1;
+    }
+
+    ssize_t n = read(fd, buffer, sizeof(buffer) - 1);
+    close(fd);
+
+    if (n <= 0) {
+        return -1;
+    }
+    buffer[n] = '\0';
+
+    /* Find closing paren of comm field - stat format: pid (comm) state ppid ... */
+    char *p = strrchr(buffer, ')');
+    if (!p) {
+        return -1;
+    }
+
+    /* Skip ") " with bounds checking */
+    char *end = buffer + n;
+    p += 2;
+    if (p >= end) {
+        return -1;
+    }
+    if (*p == ' ') {
+        p++;
+        if (p >= end) {
+            return -1;
+        }
+    }
+
+    /* Parse: state ppid */
+    char state;
+    int ppid;
+    if (sscanf(p, "%c %d", &state, &ppid) != 2) {
+        return -1;
+    }
+
+    return (pid_t)ppid;
+}
+
+static int
+get_child_pids_platform(pid_t target_pid, int recursive, pid_array_t *result)
+{
+    int retval = -1;
+    pid_array_t all_pids = {0};
+    pid_array_t ppids = {0};
+    DIR *proc_dir = NULL;
+
+    if (pid_array_init(&all_pids) < 0) {
+        goto done;
+    }
+
+    if (pid_array_init(&ppids) < 0) {
+        goto done;
+    }
+
+    proc_dir = opendir("/proc");
+    if (!proc_dir) {
+        PyErr_SetFromErrnoWithFilename(PyExc_OSError, "/proc");
+        goto done;
+    }
+
+    /* Single pass: collect PIDs and their PPIDs together */
+    for (;;) {
+        errno = 0;
+        struct dirent *entry = readdir(proc_dir);
+        if (entry == NULL) {
+            if (errno != 0) {
+                int err = errno;
+                _set_debug_oserror_from_errno_with_filename(err, "/proc",
+                    "Failed to read process directory '/proc': %s",
+                    strerror(err));
+                goto done;
+            }
+            break;
+        }
+        /* Skip non-numeric entries (also skips . and ..) */
+        if (entry->d_name[0] < '1' || entry->d_name[0] > '9') {
+            continue;
+        }
+        char *endptr;
+        long pid_long = strtol(entry->d_name, &endptr, 10);
+        if (*endptr != '\0' || pid_long <= 0) {
+            continue;
+        }
+        pid_t pid = (pid_t)pid_long;
+        pid_t ppid = get_ppid_linux(pid);
+        if (ppid < 0) {
+            continue;
+        }
+        if (pid_array_append(&all_pids, pid) < 0 ||
+            pid_array_append(&ppids, ppid) < 0) {
+            goto done;
+        }
+    }
+
+    if (closedir(proc_dir) != 0) {
+        int err = errno;
+        proc_dir = NULL;
+        _set_debug_oserror_from_errno_with_filename(err, "/proc",
+            "Failed to close process directory '/proc': %s",
+            strerror(err));
+        goto done;
+    }
+    proc_dir = NULL;
+
+    if (find_children_bfs(target_pid, recursive,
+                          all_pids.pids, ppids.pids, all_pids.count,
+                          result) < 0) {
+        goto done;
+    }
+
+    retval = 0;
+
+done:
+    if (proc_dir) {
+        closedir(proc_dir);
+    }
+    pid_array_cleanup(&all_pids);
+    pid_array_cleanup(&ppids);
+    return retval;
+}
+
+#endif /* __linux__ */
+
+/* ============================================================================
+ * MACOS IMPLEMENTATION
+ * ============================================================================ */
+
+#if defined(__APPLE__) && TARGET_OS_OSX
+
+#include <libproc.h>
+#include <sys/proc_info.h>
+
+static int
+get_child_pids_platform(pid_t target_pid, int recursive, pid_array_t *result)
+{
+    int retval = -1;
+    pid_t *pid_list = NULL;
+    pid_t *ppids = NULL;
+
+    /* Count the live PIDs.  proc_listpids() reports a byte count,
+       not an element count. */
+    int n_bytes = proc_listpids(PROC_ALL_PIDS, 0, NULL, 0);
+    int n_pids = n_bytes / (int)sizeof(pid_t);
+    if (n_pids <= 0) {
+        PyErr_SetString(PyExc_OSError, "Failed to get process count");
+        goto done;
+    }
+
+    /* Allocate buffer for PIDs (add some slack for new processes) */
+    int buffer_size = n_pids + 64;
+    pid_list = (pid_t *)PyMem_Malloc(buffer_size * sizeof(pid_t));
+    if (!pid_list) {
+        PyErr_NoMemory();
+        goto done;
+    }
+
+    /* Get actual PIDs */
+    int n_written = proc_listpids(PROC_ALL_PIDS, 0, pid_list,
+                                  buffer_size * (int)sizeof(pid_t));
+    if (n_written <= 0) {
+        PyErr_SetString(PyExc_OSError, "Failed to list PIDs");
+        goto done;
+    }
+    /* Convert the reported byte count into a pid_t element count so the
+       loop below does not walk past the PIDs the kernel actually wrote. */
+    int actual = n_written / (int)sizeof(pid_t);
+
+    /* Build pid -> ppid mapping */
+    ppids = (pid_t *)PyMem_Malloc(actual * sizeof(pid_t));
+    if (!ppids) {
+        PyErr_NoMemory();
+        goto done;
+    }
+
+    /* Get parent PIDs for each process */
+    int valid_count = 0;
+    for (int i = 0; i < actual; i++) {
+        struct proc_bsdinfo proc_info;
+        int ret = proc_pidinfo(pid_list[i], PROC_PIDTBSDINFO, 0,
+                              &proc_info, sizeof(proc_info));
+        if (ret != sizeof(proc_info)) {
+            continue;
+        }
+        pid_list[valid_count] = pid_list[i];
+        ppids[valid_count] = proc_info.pbi_ppid;
+        valid_count++;
+    }
+
+    if (find_children_bfs(target_pid, recursive,
+                          pid_list, ppids, valid_count,
+                          result) < 0) {
+        goto done;
+    }
+
+    retval = 0;
+
+done:
+    PyMem_Free(pid_list);
+    PyMem_Free(ppids);
+    return retval;
+}
+
+#endif /* __APPLE__ && TARGET_OS_OSX */
+
+/* ============================================================================
+ * WINDOWS IMPLEMENTATION
+ * ============================================================================ */
+
+#ifdef MS_WINDOWS
+
+static int
+get_child_pids_platform(pid_t target_pid, int recursive, pid_array_t *result)
+{
+    int retval = -1;
+    pid_array_t all_pids = {0};
+    pid_array_t ppids = {0};
+    HANDLE snapshot = INVALID_HANDLE_VALUE;
+
+    snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        DWORD error = GetLastError();
+        PyErr_SetFromWindowsErr(error);
+        goto done;
+    }
+
+    if (pid_array_init(&all_pids) < 0) {
+        goto done;
+    }
+
+    if (pid_array_init(&ppids) < 0) {
+        goto done;
+    }
+
+    /* Single pass: collect PIDs and PPIDs together */
+    PROCESSENTRY32 pe;
+    pe.dwSize = sizeof(PROCESSENTRY32);
+    if (!Process32First(snapshot, &pe)) {
+        DWORD error = GetLastError();
+        PyErr_SetFromWindowsErr(error);
+        goto done;
+    }
+
+    do {
+        if (pid_array_append(&all_pids, (pid_t)pe.th32ProcessID) < 0 ||
+            pid_array_append(&ppids, (pid_t)pe.th32ParentProcessID) < 0) {
+            goto done;
+        }
+    } while (Process32Next(snapshot, &pe));
+
+    DWORD error = GetLastError();
+    if (error != ERROR_NO_MORE_FILES) {
+        PyErr_SetFromWindowsErr(error);
+        goto done;
+    }
+
+    CloseHandle(snapshot);
+    snapshot = INVALID_HANDLE_VALUE;
+
+    if (find_children_bfs(target_pid, recursive,
+                          all_pids.pids, ppids.pids, all_pids.count,
+                          result) < 0) {
+        goto done;
+    }
+
+    retval = 0;
+
+done:
+    if (snapshot != INVALID_HANDLE_VALUE) {
+        CloseHandle(snapshot);
+    }
+    pid_array_cleanup(&all_pids);
+    pid_array_cleanup(&ppids);
+    return retval;
+}
+
+#endif /* MS_WINDOWS */
+
+/* ============================================================================
+ * UNSUPPORTED PLATFORM STUB
+ * ============================================================================ */
+
+#if !defined(__linux__) && !(defined(__APPLE__) && TARGET_OS_OSX) && !defined(MS_WINDOWS)
+
+static int
+get_child_pids_platform(pid_t target_pid, int recursive, pid_array_t *result)
+{
+    PyErr_SetString(PyExc_NotImplementedError,
+                   "Subprocess enumeration not supported on this platform");
+    return -1;
+}
+
+#endif
+
+/* ============================================================================
+ * PUBLIC API
+ * ============================================================================ */
+
+static PyObject *
+enumerate_child_pids(pid_t target_pid, int recursive)
+{
+    pid_array_t result;
+
+    if (pid_array_init(&result) < 0) {
+        return NULL;
+    }
+
+    if (get_child_pids_platform(target_pid, recursive, &result) < 0) {
+        pid_array_cleanup(&result);
+        return NULL;
+    }
+
+    /* Convert to Python list */
+    PyObject *list = PyList_New(result.count);
+    if (list == NULL) {
+        pid_array_cleanup(&result);
+        return NULL;
+    }
+
+    for (size_t i = 0; i < result.count; i++) {
+        PyObject *pid_obj = PyLong_FromLong((long)result.pids[i]);
+        if (pid_obj == NULL) {
+            Py_DECREF(list);
+            pid_array_cleanup(&result);
+            return NULL;
+        }
+        PyList_SET_ITEM(list, i, pid_obj);
+    }
+
+    pid_array_cleanup(&result);
+    return list;
+}
+
+/* ============================================================================
+ * GC STATISTICS
+ * ============================================================================ */
+
+static int
+init_runtime_offsets(RuntimeOffsets *offsets, int pid, int debug)
+{
+    offsets->debug = debug;
+    if (_Py_RemoteDebug_InitProcHandle(&offsets->handle, pid) < 0) {
+        set_exception_cause(offsets, PyExc_RuntimeError,
+                            "Failed to initialize process handle");
+        return -1;
+    }
+
+    if (_Py_RemoteDebug_ReadDebugOffsets(&offsets->handle,
+                                         &offsets->runtime_start_address,
+                                         &offsets->debug_offsets) < 0) {
+        set_exception_cause(offsets, PyExc_RuntimeError,
+                            "Failed to read debug offsets");
+        _Py_RemoteDebug_CleanupProcHandle(&offsets->handle);
+        return -1;
+    }
+
+    if (validate_debug_offsets(&offsets->debug_offsets) == -1) {
+        set_exception_cause(offsets, PyExc_RuntimeError,
+                            "Invalid debug offsets found");
+        _Py_RemoteDebug_CleanupProcHandle(&offsets->handle);
+        return -1;
+    }
+
+    /* _Py_DebugOffsets is deliberately left byte-identical to an unpatched
+       build, so it carries no entry for the ring.  What it does publish,
+       gc.size, still confirms that this reader and the target agree on
+       struct _gc_runtime_state; the ring's own offset comes from the local
+       headers, which is sound because _remote_debugging already refuses to
+       attach across a different major.minor. */
+    if (offsets->debug_offsets.gc.size != sizeof(struct _gc_runtime_state)) {
+        PyErr_Format(PyExc_RuntimeError,
+                     "Remote _gc_runtime_state size (%llu) does not match "
+                     "local size (%zu)",
+                     (unsigned long long)offsets->debug_offsets.gc.size,
+                     sizeof(struct _gc_runtime_state));
+        set_exception_cause(offsets, PyExc_RuntimeError,
+                            "Remote _gc_runtime_state size mismatch");
+        _Py_RemoteDebug_CleanupProcHandle(&offsets->handle);
+        return -1;
+    }
+
+    return 0;
+}
+
+static void
+cleanup_runtime_offsets(RuntimeOffsets *offsets)
+{
+    _Py_RemoteDebug_CleanupProcHandle(&offsets->handle);
+}
+
+static int
+iterate_interpreters(
+    RuntimeOffsets *offsets,
+    interpreter_processor_func processor,
+    void *context
+) {
+    uintptr_t interpreters_head_addr =
+        offsets->runtime_start_address
+        + (uintptr_t)offsets->debug_offsets.runtime_state.interpreters_head;
+    uintptr_t interpreter_id_offset =
+        (uintptr_t)offsets->debug_offsets.interpreter_state.id;
+    uintptr_t interpreter_next_offset =
+        (uintptr_t)offsets->debug_offsets.interpreter_state.next;
+
+    uintptr_t interpreter_state_addr;
+    if (_Py_RemoteDebug_ReadRemoteMemory(&offsets->handle,
+                                         interpreters_head_addr,
+                                         sizeof(void*),
+                                         &interpreter_state_addr) < 0) {
+        set_exception_cause(offsets, PyExc_RuntimeError,
+                            "Failed to read interpreter state address");
+        return -1;
+    }
+
+    if (interpreter_state_addr == 0) {
+        PyErr_SetString(PyExc_RuntimeError, "No interpreter state found");
+        return -1;
+    }
+
+    int64_t iid = 0;
+    static_assert(
+        sizeof((((PyInterpreterState*)NULL)->id)) == sizeof(iid),
+        "Sizeof of PyInterpreterState.id mismatch with local iid value");
+    while (interpreter_state_addr != 0) {
+        if (_Py_RemoteDebug_ReadRemoteMemory(
+                    &offsets->handle,
+                    interpreter_state_addr + interpreter_id_offset,
+                    sizeof(iid),
+                    &iid) < 0) {
+            set_exception_cause(offsets, PyExc_RuntimeError,
+                                "Failed to read interpreter id");
+            return -1;
+        }
+
+        if (processor(offsets, interpreter_state_addr, iid, context) < 0) {
+            return -1;
+        }
+
+        if (_Py_RemoteDebug_ReadRemoteMemory(
+                    &offsets->handle,
+                    interpreter_state_addr + interpreter_next_offset,
+                    sizeof(void*),
+                    &interpreter_state_addr) < 0) {
+            set_exception_cause(offsets, PyExc_RuntimeError,
+                                "Failed to read next interpreter state");
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+typedef struct {
+    PyObject *result;
+    PyTypeObject *gc_stats_info_type;
+    int all_interpreters;
+} GetGCStatsContext;
+
+static int
+read_gc_stats(struct gc_stats *stats, int64_t iid, PyObject *result,
+              PyTypeObject *gc_stats_info_type)
+{
+#define SET_FIELD(converter, expr) do { \
+    PyObject *value = converter(expr); \
+    if (value == NULL) { \
+        goto error; \
+    } \
+    PyStructSequence_SetItem(item, field++, value); \
+} while (0)
+
+    PyObject *item = NULL;
+
+    for (unsigned long gen = 0; gen < NUM_GENERATIONS; gen++) {
+        struct gc_generation_stats *items;
+        int size;
+        if (gen == 0) {
+            items = (struct gc_generation_stats *)stats->young.items;
+            size = GC_YOUNG_STATS_SIZE;
+        }
+        else {
+            items = (struct gc_generation_stats *)stats->old[gen-1].items;
+            size = GC_OLD_STATS_SIZE;
+        }
+        for (int i = 0; i < size; i++, items++) {
+            item = PyStructSequence_New(gc_stats_info_type);
+            if (item == NULL) {
+                goto error;
+            }
+            Py_ssize_t field = 0;
+
+            SET_FIELD(PyLong_FromUnsignedLong, gen);
+            SET_FIELD(PyLong_FromLongLong, iid);
+
+            SET_FIELD(PyLong_FromLongLong, items->ts_start);
+            SET_FIELD(PyLong_FromLongLong, items->ts_stop);
+            SET_FIELD(PyLong_FromSsize_t, items->collections);
+            SET_FIELD(PyLong_FromSsize_t, items->collected);
+            SET_FIELD(PyLong_FromSsize_t, items->uncollectable);
+            SET_FIELD(PyLong_FromSsize_t, items->candidates);
+            SET_FIELD(PyLong_FromSsize_t, items->heap_size);
+
+            SET_FIELD(PyFloat_FromDouble, items->duration);
+
+            int rc = PyList_Append(result, item);
+            Py_CLEAR(item);
+            if (rc < 0) {
+                goto error;
+            }
+        }
+    }
+
+#undef SET_FIELD
+
+    return 0;
+
+error:
+    Py_XDECREF(item);
+
+    return -1;
+}
+
+static int
+get_gc_stats_from_interpreter_state(RuntimeOffsets *offsets,
+                                    uintptr_t interpreter_state_addr,
+                                    int64_t iid,
+                                    void *context)
+{
+    GetGCStatsContext *ctx = (GetGCStatsContext *)context;
+    if (!ctx->all_interpreters && iid > 0) {
+        return 0;
+    }
+
+    uintptr_t gc_stats_addr = 0;
+    uintptr_t gc_stats_pointer_address = interpreter_state_addr
+        + offsets->debug_offsets.interpreter_state.gc
+        + offsetof(struct _gc_runtime_state, generation_stats);
+    if (_Py_RemoteDebug_ReadRemoteMemory(&offsets->handle,
+                                         gc_stats_pointer_address,
+                                         sizeof(gc_stats_addr),
+                                         &gc_stats_addr) < 0) {
+        set_exception_cause(offsets, PyExc_RuntimeError,
+                            "Failed to read GC state address");
+        return -1;
+    }
+    if (gc_stats_addr == 0) {
+        /* This slot is dummy1 in an unpatched build, reserved when 3.14
+           reverted the incremental collector and never written, so it reads
+           as zero there.  A null pointer therefore means the target is not
+           running a patched interpreter, which is worth saying plainly
+           rather than reporting as a failed read. */
+        PyErr_SetString(PyExc_RuntimeError,
+                        "Target process does not expose GC statistics: it is "
+                        "not running an interpreter with the GC statistics "
+                        "patch applied");
+        return -1;
+    }
+
+    struct gc_stats stats;
+    if (_Py_RemoteDebug_ReadRemoteMemory(&offsets->handle,
+                                         gc_stats_addr,
+                                         sizeof(stats),
+                                         &stats) < 0) {
+        set_exception_cause(offsets, PyExc_RuntimeError,
+                            "Failed to read GC state");
+        return -1;
+    }
+
+    if (read_gc_stats(&stats, iid, ctx->result,
+                      ctx->gc_stats_info_type) < 0) {
+        set_exception_cause(offsets, PyExc_RuntimeError,
+                            "Failed to populate GC stats result");
+        return -1;
+    }
+
+    return 0;
+}
+
+static PyObject *
+do_get_gc_stats(RuntimeOffsets *offsets, int all_interpreters,
+                PyTypeObject *gc_stats_info_type)
+{
+    PyObject *result = PyList_New(0);
+    if (result == NULL) {
+        return NULL;
+    }
+
+    GetGCStatsContext ctx = {
+        .result = result,
+        .gc_stats_info_type = gc_stats_info_type,
+        .all_interpreters = all_interpreters,
+    };
+
+    if (iterate_interpreters(offsets, get_gc_stats_from_interpreter_state,
+                             &ctx) < 0) {
+        Py_DECREF(result);
+        return NULL;
+    }
+
+    return result;
+}
+
+/*[clinic input]
+_remote_debugging.get_gc_stats
+
+    pid: int
+    *
+    all_interpreters: bool = False
+        If True, return GC statistics from all interpreters.
+        If False, return only from main interpreter.
+
+Get garbage collector statistics from external Python process.
+
+Returns:
+    list of GCStatsInfo: A list of stats samples containing:
+        - gen: GC generation number.
+        - iid: Interpreter ID.
+        - ts_start: Raw timestamp at collection start.
+        - ts_stop: Raw timestamp at collection stop.
+        - collections: Total number of collections.
+        - collected: Total number of collected objects.
+        - uncollectable: Total number of uncollectable objects.
+        - candidates: Total objects considered and traversed.
+        - heap_size: Number of live objects.
+        - duration: Total collection time, in seconds.
+
+Raises:
+    RuntimeError: If the target process cannot be inspected or if its
+        debug offsets or GC stats layout are incompatible.
+[clinic start generated code]*/
+
+static PyObject *
+_remote_debugging_get_gc_stats_impl(PyObject *module, int pid,
+                                    int all_interpreters)
+/*[clinic end generated code: output=d9dce5f7add149bb input=b426f540851a5513]*/
+{
+    RuntimeOffsets offsets;
+    if (init_runtime_offsets(&offsets, pid, /*debug=*/1) < 0) {
+        return NULL;
+    }
+
+    RemoteDebuggingState *st = RemoteDebugging_GetState(module);
+    PyObject *result = do_get_gc_stats(&offsets, all_interpreters,
+                                       st->GCStatsInfo_Type);
+
+    cleanup_runtime_offsets(&offsets);
+    return result;
+}
+
+/*[clinic input]
+_remote_debugging.get_child_pids
+
+    pid: int
+        Process ID of the parent process
+    *
+    recursive: bool = True
+        If True, return all descendants (children, grandchildren, etc.).
+        If False, return only direct children.
+
+Get all child process IDs of the given process.
+
+Returns a list of child process IDs.  Returns an empty list if no
+children are found.
+
+This function provides a snapshot of child processes at a moment in
+time.  Child processes may exit or new ones may be created after the
+list is returned.
+
+Raises:
+    OSError: If unable to enumerate processes
+    NotImplementedError: If not supported on this platform
+[clinic start generated code]*/
+
+static PyObject *
+_remote_debugging_get_child_pids_impl(PyObject *module, int pid,
+                                      int recursive)
+/*[clinic end generated code: output=1ae2289c6b953e4b input=c6437b52e2fdd880]*/
+{
+    return enumerate_child_pids((pid_t)pid, recursive);
 }
 
 static PyModuleDef_Slot remote_debugging_slots[] = {
@@ -3662,6 +4567,8 @@ static PyModuleDef_Slot remote_debugging_slots[] = {
 };
 
 static PyMethodDef remote_debugging_methods[] = {
+    _REMOTE_DEBUGGING_GET_CHILD_PIDS_METHODDEF
+    _REMOTE_DEBUGGING_GET_GC_STATS_METHODDEF
     {NULL, NULL, 0, NULL},
 };
 

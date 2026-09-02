@@ -134,6 +134,11 @@ _PyGC_Init(PyInterpreterState *interp)
 {
     GCState *gcstate = &interp->gc;
 
+    gcstate->generation_stats = PyMem_RawCalloc(1, sizeof(struct gc_stats));
+    if (gcstate->generation_stats == NULL) {
+        return _PyStatus_NO_MEMORY();
+    }
+
     gcstate->garbage = PyList_New(0);
     if (gcstate->garbage == NULL) {
         return _PyStatus_NO_MEMORY();
@@ -388,11 +393,12 @@ validate_list(PyGC_Head *head, enum flagstates flags)
 /* Set all gc_refs = ob_refcnt.  After this, gc_refs is > 0 and
  * PREV_MASK_COLLECTING bit is set for all objects in containers.
  */
-static void
+static Py_ssize_t
 update_refs(PyGC_Head *containers)
 {
     PyGC_Head *next;
     PyGC_Head *gc = GC_NEXT(containers);
+    Py_ssize_t candidates = 0;
 
     while (gc != containers) {
         next = GC_NEXT(gc);
@@ -424,7 +430,9 @@ update_refs(PyGC_Head *containers)
          */
         _PyObject_ASSERT(op, gc_get_refs(gc) != 0);
         gc = next;
+        candidates++;
     }
+    return candidates;
 }
 
 /* A traversal callback for subtract_refs. */
@@ -1109,7 +1117,7 @@ flag set but it does not clear it to skip unnecessary iteration. Before the
 flag is cleared (for example, by using 'clear_unreachable_mask' function or
 by a call to 'move_legacy_finalizers'), the 'unreachable' list is not a normal
 list and we can not use most gc_list_* functions for it. */
-static inline void
+static inline Py_ssize_t
 deduce_unreachable(PyGC_Head *base, PyGC_Head *unreachable) {
     validate_list(base, collecting_clear_unreachable_clear);
     /* Using ob_refcnt and gc_refs, calculate which objects in the
@@ -1117,7 +1125,7 @@ deduce_unreachable(PyGC_Head *base, PyGC_Head *unreachable) {
      * refcount greater than 0 when all the references within the
      * set are taken into account).
      */
-    update_refs(base);  // gc_prev is used for gc_refs
+    Py_ssize_t candidates = update_refs(base);  // gc_prev is used for gc_refs
     subtract_refs(base);
 
     /* Leave everything reachable from outside base in base, and move
@@ -1159,6 +1167,7 @@ deduce_unreachable(PyGC_Head *base, PyGC_Head *unreachable) {
     move_unreachable(base, unreachable);  // gc_prev is pointer again
     validate_list(base, collecting_clear_unreachable_clear);
     validate_list(unreachable, collecting_set_unreachable_set);
+    return candidates;
 }
 
 /* Handle objects that may have resurrected after a call to 'finalize_garbage', moving
@@ -1199,8 +1208,7 @@ handle_resurrected_objects(PyGC_Head *unreachable, PyGC_Head* still_unreachable,
  */
 static void
 invoke_gc_callback(PyThreadState *tstate, const char *phase,
-                   int generation, Py_ssize_t collected,
-                   Py_ssize_t uncollectable)
+                   int generation, struct gc_generation_stats *stats)
 {
     assert(!_PyErr_Occurred(tstate));
 
@@ -1214,10 +1222,12 @@ invoke_gc_callback(PyThreadState *tstate, const char *phase,
     assert(PyList_CheckExact(gcstate->callbacks));
     PyObject *info = NULL;
     if (PyList_GET_SIZE(gcstate->callbacks) != 0) {
-        info = Py_BuildValue("{sisnsn}",
+        info = Py_BuildValue("{sisnsnsnsd}",
             "generation", generation,
-            "collected", collected,
-            "uncollectable", uncollectable);
+            "collected", stats->collected,
+            "uncollectable", stats->uncollectable,
+            "candidates", stats->candidates,
+            "duration", stats->duration);
         if (info == NULL) {
             PyErr_FormatUnraisable("Exception ignored on invoking gc callbacks");
             return;
@@ -1307,20 +1317,81 @@ gc_select_generation(GCState *gcstate)
 }
 
 
+static struct gc_generation_stats *
+gc_get_stats(GCState *gcstate, int gen)
+{
+    if (gen == 0) {
+        struct gc_young_stats_buffer *buffer = &gcstate->generation_stats->young;
+        buffer->index = (buffer->index + 1) % GC_YOUNG_STATS_SIZE;
+        struct gc_generation_stats *stats = &buffer->items[buffer->index];
+        return stats;
+    }
+    else {
+        struct gc_old_stats_buffer *buffer = &gcstate->generation_stats->old[gen - 1];
+        buffer->index = (buffer->index + 1) % GC_OLD_STATS_SIZE;
+        struct gc_generation_stats *stats = &buffer->items[buffer->index];
+        return stats;
+    }
+}
+
+static struct gc_generation_stats *
+gc_get_prev_stats(GCState *gcstate, int gen)
+{
+    if (gen == 0) {
+        struct gc_young_stats_buffer *buffer = &gcstate->generation_stats->young;
+        struct gc_generation_stats *stats = &buffer->items[buffer->index];
+        return stats;
+    }
+    else {
+        struct gc_old_stats_buffer *buffer = &gcstate->generation_stats->old[gen - 1];
+        struct gc_generation_stats *stats = &buffer->items[buffer->index];
+        return stats;
+    }
+}
+
+static void
+add_stats(GCState *gcstate, int gen, struct gc_generation_stats *stats)
+{
+    struct gc_generation_stats *prev_stats = gc_get_prev_stats(gcstate, gen);
+    struct gc_generation_stats *cur_stats = gc_get_stats(gcstate, gen);
+
+    memcpy(cur_stats, prev_stats, sizeof(struct gc_generation_stats));
+
+    cur_stats->ts_start = stats->ts_start;
+    cur_stats->collections += 1;
+    cur_stats->collected += stats->collected;
+    cur_stats->uncollectable += stats->uncollectable;
+    cur_stats->candidates += stats->candidates;
+
+    cur_stats->duration += stats->duration;
+    cur_stats->heap_size = stats->heap_size;
+    /* Publish ts_stop last so remote readers do not select a partially
+       updated stats record as the latest collection.  Readers treat
+       ts_start < ts_stop as "this slot holds a finished collection", so a stop
+       that is not strictly later would be mistaken for a slot caught mid-write
+       and skipped.  A collection can genuinely measure as zero: the perf
+       counter advances in 41.67 ns steps on Apple silicon, and an empty young
+       generation finishes well inside a single step.  Publish a stop that is
+       strictly later so the slot reads as finished; one nanosecond is far
+       below the clock's own resolution, and `duration` is recorded separately
+       and left untouched. */
+    cur_stats->ts_stop = (stats->ts_stop > stats->ts_start)
+                         ? stats->ts_stop
+                         : stats->ts_start + 1;
+}
+
+
 /* This is the main function.  Read this to understand how the
  * collection process works. */
 static Py_ssize_t
 gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
 {
     int i;
-    Py_ssize_t m = 0; /* # objects collected */
-    Py_ssize_t n = 0; /* # unreachable objects that couldn't be collected */
     PyGC_Head *young; /* the generation we are examining */
     PyGC_Head *old; /* next older generation */
     PyGC_Head unreachable; /* non-problematic unreachable trash */
     PyGC_Head finalizers;  /* objects with, & reachable from, __del__ */
     PyGC_Head *gc;
-    PyTime_t t1 = 0;   /* initialize to prevent a compiler warning */
     GCState *gcstate = &tstate->interp->gc;
 
     // gc_collect_main() must not be called before _PyGC_Init
@@ -1354,15 +1425,17 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
 #endif
     GC_STAT_ADD(generation, collections, 1);
 
+    struct gc_generation_stats stats = { 0 };
     if (reason != _Py_GC_REASON_SHUTDOWN) {
-        invoke_gc_callback(tstate, "start", generation, 0, 0);
+        invoke_gc_callback(tstate, "start", generation, &stats);
     }
 
+    stats.heap_size = gcstate->heap_size;
+    // ignore error: don't interrupt the GC if reading the clock fails
+    (void)PyTime_PerfCounterRaw(&stats.ts_start);
     if (gcstate->debug & _PyGC_DEBUG_STATS) {
         PySys_WriteStderr("gc: collecting generation %d...\n", generation);
         show_stats_each_generations(gcstate);
-        // ignore error: don't interrupt the GC if reading the clock fails
-        (void)PyTime_PerfCounterRaw(&t1);
     }
 
     if (PyDTrace_GC_START_ENABLED()) {
@@ -1392,7 +1465,7 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     }
     validate_list(old, collecting_clear_unreachable_clear);
 
-    deduce_unreachable(young, &unreachable);
+    stats.candidates = deduce_unreachable(young, &unreachable);
 
     untrack_tuples(young);
     /* Move reachable objects to next generation. */
@@ -1438,7 +1511,7 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     }
 
     /* Clear weakrefs and invoke callbacks as necessary. */
-    m += handle_weakrefs(&unreachable, old, true);
+    stats.collected += handle_weakrefs(&unreachable, old, true);
     validate_list(old, collecting_clear_unreachable_clear);
     validate_list(&unreachable, collecting_set_unreachable_clear);
 
@@ -1463,23 +1536,25 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     * the reference cycles to be broken.  It may also cause some objects
     * in finalizers to be freed.
     */
-    m += gc_list_size(&final_unreachable);
+    stats.collected += gc_list_size(&final_unreachable);
     delete_garbage(tstate, gcstate, &final_unreachable, old);
 
     /* Collect statistics on uncollectable objects found and print
      * debugging information. */
+    Py_ssize_t n = 0;
     for (gc = GC_NEXT(&finalizers); gc != &finalizers; gc = GC_NEXT(gc)) {
         n++;
         if (gcstate->debug & _PyGC_DEBUG_UNCOLLECTABLE)
             debug_cycle("uncollectable", FROM_GC(gc));
     }
+    stats.uncollectable = n;
+    (void)PyTime_PerfCounterRaw(&stats.ts_stop);
+    stats.duration = PyTime_AsSecondsDouble(stats.ts_stop - stats.ts_start);
     if (gcstate->debug & _PyGC_DEBUG_STATS) {
-        PyTime_t t2;
-        (void)PyTime_PerfCounterRaw(&t2);
-        double d = PyTime_AsSecondsDouble(t2 - t1);
         PySys_WriteStderr(
             "gc: done, %zd unreachable, %zd uncollectable, %.4fs elapsed\n",
-            n+m, n, d);
+            stats.uncollectable+stats.collected, stats.uncollectable,
+            stats.duration);
     }
 
     /* Append instances in the uncollectable set to a Python
@@ -1505,12 +1580,18 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
     }
 
     /* Update stats */
-    struct gc_generation_stats *stats = &gcstate->generation_stats[generation];
-    stats->collections++;
-    stats->collected += m;
-    stats->uncollectable += n;
+    add_stats(gcstate, generation, &stats);
 
-    GC_STAT_ADD(generation, objects_collected, m);
+    /* Keep stock's three counters in step.  They are what an extension
+       compiled against unpatched headers reads, and gc.get_stats() is
+       served from the ring, so this exists purely so that nothing built
+       against stock 3.14 observes a frozen counter. */
+    struct gc_generation_counters *legacy = &gcstate->generation_counters[generation];
+    legacy->collections++;
+    legacy->collected += stats.collected;
+    legacy->uncollectable += stats.uncollectable;
+
+    GC_STAT_ADD(generation, objects_collected, stats.collected);
 #ifdef Py_STATS
     if (_Py_stats) {
         GC_STAT_ADD(generation, object_visits,
@@ -1520,16 +1601,16 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)
 #endif
 
     if (PyDTrace_GC_DONE_ENABLED()) {
-        PyDTrace_GC_DONE(n + m);
+        PyDTrace_GC_DONE(stats.uncollectable + stats.collected);
     }
 
     if (reason != _Py_GC_REASON_SHUTDOWN) {
-        invoke_gc_callback(tstate, "stop", generation, m, n);
+        invoke_gc_callback(tstate, "stop", generation, &stats);
     }
 
     assert(!_PyErr_Occurred(tstate));
     _Py_atomic_store_int(&gcstate->collecting, 0);
-    return n + m;
+    return stats.uncollectable + stats.collected;
 }
 
 static int
@@ -1759,6 +1840,8 @@ _PyGC_Fini(PyInterpreterState *interp)
     GCState *gcstate = &interp->gc;
     Py_CLEAR(gcstate->garbage);
     Py_CLEAR(gcstate->callbacks);
+    PyMem_RawFree(gcstate->generation_stats);
+    gcstate->generation_stats = NULL;
 
     /* Prevent a subtle bug that affects sub-interpreters that use basic
      * single-phase init extensions (m_size == -1).  Those extensions cause objects
