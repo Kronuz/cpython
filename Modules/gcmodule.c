@@ -25,14 +25,50 @@
 
 #include "Python.h"
 #include "pycore_context.h"
+#include "pycore_gc_stats.h"    // _Py_gc_stats_anchor
 #include "pycore_initconfig.h"
 #include "pycore_interp.h"      // PyInterpreterState.gc
 #include "pycore_object.h"
 #include "pycore_pyerrors.h"
 #include "pycore_pystate.h"     // _PyThreadState_GET()
+#include "pycore_runtime.h"     // _PyRuntime
 #include "pydtrace.h"
 
+#if defined(__APPLE__)
+#  include <mach-o/loader.h>    // SEG_DATA
+#endif
+
 typedef struct _gc_runtime_state GCState;
+
+/* Out-of-process discovery anchor (see Include/internal/pycore_gc_stats.h).
+   Placed in its own section so an external reader can find it by locating the
+   section and validating the cookie, then follow runtime + the offsets below
+   to each interpreter's ring.  Keeping it out of _PyRuntimeState and
+   PyInterpreterState is the point: neither structure changes, so extensions
+   compiled against unpatched headers keep working. */
+#if defined(MS_WINDOWS)
+#pragma section(_Py_GCStats_SECTION, read, write)
+__declspec(allocate(_Py_GCStats_SECTION))
+#elif defined(__APPLE__)
+__attribute__((section(SEG_DATA "," _Py_GCStats_SECTION)))
+#endif
+struct _Py_GCStatsAnchor _Py_gc_stats_anchor
+#if defined(__linux__) && (defined(__GNUC__) || defined(__clang__))
+__attribute__((section("." _Py_GCStats_SECTION)))
+#endif
+= {
+    .cookie = _Py_GCStats_COOKIE,
+    .version = _Py_GCStats_VERSION,
+    .flags = 0,
+    .gc_stats_size = sizeof(struct gc_stats),
+    .young_slots = GC_YOUNG_STATS_SIZE,
+    .old_slots = GC_OLD_STATS_SIZE,
+    .interpreters_head = offsetof(_PyRuntimeState, interpreters.head),
+    .interpreter_id = offsetof(PyInterpreterState, id),
+    .interpreter_next = offsetof(PyInterpreterState, next),
+    .generation_stats = offsetof(PyInterpreterState, generation_stats),
+    .runtime = &_PyRuntime,
+};
 
 /*[clinic input]
 module gc
@@ -168,6 +204,11 @@ _PyGC_Init(PyInterpreterState *interp)
 
     gcstate->callbacks = PyList_New(0);
     if (gcstate->callbacks == NULL) {
+        return _PyStatus_NO_MEMORY();
+    }
+
+    interp->generation_stats = PyMem_RawCalloc(1, sizeof(struct gc_stats));
+    if (interp->generation_stats == NULL) {
         return _PyStatus_NO_MEMORY();
     }
 
@@ -415,11 +456,12 @@ validate_list(PyGC_Head *head, enum flagstates flags)
 /* Set all gc_refs = ob_refcnt.  After this, gc_refs is > 0 and
  * PREV_MASK_COLLECTING bit is set for all objects in containers.
  */
-static void
+static Py_ssize_t
 update_refs(PyGC_Head *containers)
 {
     PyGC_Head *next;
     PyGC_Head *gc = GC_NEXT(containers);
+    Py_ssize_t candidates = 0;
 
     while (gc != containers) {
         next = GC_NEXT(gc);
@@ -453,7 +495,9 @@ update_refs(PyGC_Head *containers)
          */
         _PyObject_ASSERT(FROM_GC(gc), gc_get_refs(gc) != 0);
         gc = next;
+        candidates++;
     }
+    return candidates;
 }
 
 /* A traversal callback for subtract_refs. */
@@ -1104,7 +1148,7 @@ flag set but it does not clear it to skip unnecessary iteration. Before the
 flag is cleared (for example, by using 'clear_unreachable_mask' function or
 by a call to 'move_legacy_finalizers'), the 'unreachable' list is not a normal
 list and we can not use most gc_list_* functions for it. */
-static inline void
+static inline Py_ssize_t
 deduce_unreachable(PyGC_Head *base, PyGC_Head *unreachable) {
     validate_list(base, collecting_clear_unreachable_clear);
     /* Using ob_refcnt and gc_refs, calculate which objects in the
@@ -1112,7 +1156,7 @@ deduce_unreachable(PyGC_Head *base, PyGC_Head *unreachable) {
      * refcount greater than 0 when all the references within the
      * set are taken into account).
      */
-    update_refs(base);  // gc_prev is used for gc_refs
+    Py_ssize_t candidates = update_refs(base);  // gc_prev is used for gc_refs
     subtract_refs(base);
 
     /* Leave everything reachable from outside base in base, and move
@@ -1154,6 +1198,7 @@ deduce_unreachable(PyGC_Head *base, PyGC_Head *unreachable) {
     move_unreachable(base, unreachable);  // gc_prev is pointer again
     validate_list(base, collecting_clear_unreachable_clear);
     validate_list(unreachable, collecting_set_unreachable_set);
+    return candidates;
 }
 
 /* Handle objects that may have resurrected after a call to 'finalize_garbage', moving
@@ -1188,6 +1233,73 @@ handle_resurrected_objects(PyGC_Head *unreachable, PyGC_Head* still_unreachable,
     gc_list_merge(resurrected, old_generation);
 }
 
+static void
+invoke_gc_callback(PyThreadState *tstate, const char *phase,
+                   int generation, struct gc_generation_stats *stats);
+
+static struct gc_generation_stats *
+ring_get_stats(struct gc_stats *ring, int gen)
+{
+    if (gen == 0) {
+        struct gc_young_stats_buffer *buffer = &ring->young;
+        buffer->index = (buffer->index + 1) % GC_YOUNG_STATS_SIZE;
+        struct gc_generation_stats *stats = &buffer->items[buffer->index];
+        return stats;
+    }
+    else {
+        struct gc_old_stats_buffer *buffer = &ring->old[gen - 1];
+        buffer->index = (buffer->index + 1) % GC_OLD_STATS_SIZE;
+        struct gc_generation_stats *stats = &buffer->items[buffer->index];
+        return stats;
+    }
+}
+
+static struct gc_generation_stats *
+ring_get_prev_stats(struct gc_stats *ring, int gen)
+{
+    if (gen == 0) {
+        struct gc_young_stats_buffer *buffer = &ring->young;
+        struct gc_generation_stats *stats = &buffer->items[buffer->index];
+        return stats;
+    }
+    else {
+        struct gc_old_stats_buffer *buffer = &ring->old[gen - 1];
+        struct gc_generation_stats *stats = &buffer->items[buffer->index];
+        return stats;
+    }
+}
+
+static void
+add_stats(struct gc_stats *ring, int gen, struct gc_generation_stats *stats)
+{
+    struct gc_generation_stats *prev_stats = ring_get_prev_stats(ring, gen);
+    struct gc_generation_stats *cur_stats = ring_get_stats(ring, gen);
+
+    memcpy(cur_stats, prev_stats, sizeof(struct gc_generation_stats));
+
+    cur_stats->ts_start = stats->ts_start;
+    cur_stats->collections += 1;
+    cur_stats->collected += stats->collected;
+    cur_stats->uncollectable += stats->uncollectable;
+    cur_stats->candidates += stats->candidates;
+
+    cur_stats->duration += stats->duration;
+    cur_stats->heap_size = stats->heap_size;
+    /* Publish ts_stop last so remote readers do not select a partially
+       updated stats record as the latest collection.  Readers treat
+       ts_start < ts_stop as "this slot holds a finished collection", so a stop
+       that is not strictly later would be mistaken for a slot caught mid-write
+       and skipped.  A collection can genuinely measure as zero: the perf
+       counter advances in 41.67 ns steps on Apple silicon, and an empty young
+       generation finishes well inside a single step.  Publish a stop that is
+       strictly later so the slot reads as finished; one nanosecond is far
+       below the clock's own resolution, and `duration` is recorded separately
+       and left untouched. */
+    cur_stats->ts_stop = (stats->ts_stop > stats->ts_start)
+                         ? stats->ts_stop
+                         : stats->ts_start + 1;
+}
+
 /* This is the main function.  Read this to understand how the
  * collection process works. */
 static Py_ssize_t
@@ -1196,14 +1308,11 @@ gc_collect_main(PyThreadState *tstate, int generation,
                 int nofail)
 {
     int i;
-    Py_ssize_t m = 0; /* # objects collected */
-    Py_ssize_t n = 0; /* # unreachable objects that couldn't be collected */
     PyGC_Head *young; /* the generation we are examining */
     PyGC_Head *old; /* next older generation */
     PyGC_Head unreachable; /* non-problematic unreachable trash */
     PyGC_Head finalizers;  /* objects with, & reachable from, __del__ */
     PyGC_Head *gc;
-    _PyTime_t t1 = 0;   /* initialize to prevent a compiler warning */
     GCState *gcstate = &tstate->interp->gc;
 
     // gc_collect_main() must not be called before _PyGC_Init
@@ -1211,10 +1320,19 @@ gc_collect_main(PyThreadState *tstate, int generation,
     assert(gcstate->garbage != NULL);
     assert(!_PyErr_Occurred(tstate));
 
+    struct gc_generation_stats stats = { 0 };
+    if (!nofail) {
+        invoke_gc_callback(tstate, "start", generation, &stats);
+    }
+
+    /* This tree's default (GIL) collector maintains no running live-object
+       count: this patch adds no hooks to object tracking or untracking, so
+       there is nothing to read here and heap_size is left at zero. */
+    stats.ts_start = _PyTime_GetPerfCounter();
+
     if (gcstate->debug & DEBUG_STATS) {
         PySys_WriteStderr("gc: collecting generation %d...\n", generation);
         show_stats_each_generations(gcstate);
-        t1 = _PyTime_GetPerfCounter();
     }
 
     if (PyDTrace_GC_START_ENABLED())
@@ -1239,7 +1357,7 @@ gc_collect_main(PyThreadState *tstate, int generation,
         old = young;
     validate_list(old, collecting_clear_unreachable_clear);
 
-    deduce_unreachable(young, &unreachable);
+    stats.candidates = deduce_unreachable(young, &unreachable);
 
     untrack_tuples(young);
     /* Move reachable objects to next generation. */
@@ -1281,7 +1399,7 @@ gc_collect_main(PyThreadState *tstate, int generation,
     }
 
     /* Clear weakrefs and invoke callbacks as necessary. */
-    m += handle_weakrefs(&unreachable, old);
+    stats.collected += handle_weakrefs(&unreachable, old);
 
     validate_list(old, collecting_clear_unreachable_clear);
     validate_list(&unreachable, collecting_set_unreachable_clear);
@@ -1299,21 +1417,25 @@ gc_collect_main(PyThreadState *tstate, int generation,
     * the reference cycles to be broken.  It may also cause some objects
     * in finalizers to be freed.
     */
-    m += gc_list_size(&final_unreachable);
+    stats.collected += gc_list_size(&final_unreachable);
     delete_garbage(tstate, gcstate, &final_unreachable, old);
 
     /* Collect statistics on uncollectable objects found and print
      * debugging information. */
+    Py_ssize_t n = 0;
     for (gc = GC_NEXT(&finalizers); gc != &finalizers; gc = GC_NEXT(gc)) {
         n++;
         if (gcstate->debug & DEBUG_UNCOLLECTABLE)
             debug_cycle("uncollectable", FROM_GC(gc));
     }
+    stats.uncollectable = n;
+    stats.ts_stop = _PyTime_GetPerfCounter();
+    stats.duration = _PyTime_AsSecondsDouble(stats.ts_stop - stats.ts_start);
     if (gcstate->debug & DEBUG_STATS) {
-        double d = _PyTime_AsSecondsDouble(_PyTime_GetPerfCounter() - t1);
         PySys_WriteStderr(
             "gc: done, %zd unreachable, %zd uncollectable, %.4fs elapsed\n",
-            n+m, n, d);
+            stats.uncollectable + stats.collected, stats.uncollectable,
+            stats.duration);
     }
 
     /* Append instances in the uncollectable set to a Python
@@ -1340,23 +1462,34 @@ gc_collect_main(PyThreadState *tstate, int generation,
 
     /* Update stats */
     if (n_collected) {
-        *n_collected = m;
+        *n_collected = stats.collected;
     }
     if (n_uncollectable) {
-        *n_uncollectable = n;
+        *n_uncollectable = stats.uncollectable;
     }
 
-    struct gc_generation_stats *stats = &gcstate->generation_stats[generation];
-    stats->collections++;
-    stats->collected += m;
-    stats->uncollectable += n;
+    add_stats(tstate->interp->generation_stats, generation, &stats);
+
+    /* Keep stock 3.12's three counters in step.  They are what an extension
+       compiled against unpatched headers reads; gc.get_stats() is served
+       from the ring, so this exists purely so nothing built against stock
+       3.12 observes a frozen counter. */
+    struct gc_generation_counters *legacy =
+        &gcstate->generation_counters[generation];
+    legacy->collections++;
+    legacy->collected += stats.collected;
+    legacy->uncollectable += stats.uncollectable;
 
     if (PyDTrace_GC_DONE_ENABLED()) {
-        PyDTrace_GC_DONE(n + m);
+        PyDTrace_GC_DONE(stats.uncollectable + stats.collected);
+    }
+
+    if (!nofail) {
+        invoke_gc_callback(tstate, "stop", generation, &stats);
     }
 
     assert(!_PyErr_Occurred(tstate));
-    return n + m;
+    return stats.uncollectable + stats.collected;
 }
 
 /* Invoke progress callbacks to notify clients that garbage collection
@@ -1364,8 +1497,7 @@ gc_collect_main(PyThreadState *tstate, int generation,
  */
 static void
 invoke_gc_callback(PyThreadState *tstate, const char *phase,
-                   int generation, Py_ssize_t collected,
-                   Py_ssize_t uncollectable)
+                   int generation, struct gc_generation_stats *stats)
 {
     assert(!_PyErr_Occurred(tstate));
 
@@ -1379,10 +1511,12 @@ invoke_gc_callback(PyThreadState *tstate, const char *phase,
     assert(PyList_CheckExact(gcstate->callbacks));
     PyObject *info = NULL;
     if (PyList_GET_SIZE(gcstate->callbacks) != 0) {
-        info = Py_BuildValue("{sisnsn}",
+        info = Py_BuildValue("{sisnsnsnsd}",
             "generation", generation,
-            "collected", collected,
-            "uncollectable", uncollectable);
+            "collected", stats->collected,
+            "uncollectable", stats->uncollectable,
+            "candidates", stats->candidates,
+            "duration", stats->duration);
         if (info == NULL) {
             PyErr_WriteUnraisable(NULL);
             return;
@@ -1421,10 +1555,7 @@ static Py_ssize_t
 gc_collect_with_callback(PyThreadState *tstate, int generation)
 {
     assert(!_PyErr_Occurred(tstate));
-    Py_ssize_t result, collected, uncollectable;
-    invoke_gc_callback(tstate, "start", generation, 0, 0);
-    result = gc_collect_main(tstate, generation, &collected, &uncollectable, 0);
-    invoke_gc_callback(tstate, "stop", generation, collected, uncollectable);
+    Py_ssize_t result = gc_collect_main(tstate, generation, NULL, NULL, 0);
     assert(!_PyErr_Occurred(tstate));
     return result;
 }
@@ -1839,10 +1970,11 @@ gc_get_stats_impl(PyObject *module)
 
     /* To get consistent values despite allocations while constructing
        the result list, we use a snapshot of the running stats. */
-    GCState *gcstate = get_gc_state();
-    for (i = 0; i < NUM_GENERATIONS; i++) {
-        stats[i] = gcstate->generation_stats[i];
-    }
+    PyInterpreterState *interp = _PyInterpreterState_GET();
+    struct gc_stats *ring = interp->generation_stats;
+    stats[0] = ring->young.items[ring->young.index];
+    stats[1] = ring->old[0].items[ring->old[0].index];
+    stats[2] = ring->old[1].items[ring->old[1].index];
 
     PyObject *result = PyList_New(0);
     if (result == NULL)
@@ -1851,10 +1983,12 @@ gc_get_stats_impl(PyObject *module)
     for (i = 0; i < NUM_GENERATIONS; i++) {
         PyObject *dict;
         st = &stats[i];
-        dict = Py_BuildValue("{snsnsn}",
+        dict = Py_BuildValue("{snsnsnsnsd}",
                              "collections", st->collections,
                              "collected", st->collected,
-                             "uncollectable", st->uncollectable
+                             "uncollectable", st->uncollectable,
+                             "candidates", st->candidates,
+                             "duration", st->duration
                             );
         if (dict == NULL)
             goto error;
@@ -2188,6 +2322,8 @@ _PyGC_Fini(PyInterpreterState *interp)
     GCState *gcstate = &interp->gc;
     Py_CLEAR(gcstate->garbage);
     Py_CLEAR(gcstate->callbacks);
+    PyMem_RawFree(interp->generation_stats);
+    interp->generation_stats = NULL;
 
     /* Prevent a subtle bug that affects sub-interpreters that use basic
      * single-phase init extensions (m_size == -1).  Those extensions cause objects
