@@ -6903,6 +6903,90 @@ See section Function definitions for the syntax of parameter lists.
 Note that functions created with lambda expressions cannot contain
 statements or annotations.
 ''',
+    'lazy': r'''Lazy imports
+************
+
+The "lazy" keyword is a soft keyword that only has special meaning
+when it appears immediately before an "import" or "from" statement.
+When an import statement is preceded by the "lazy" keyword, the import
+becomes *lazy*: the module is not loaded immediately at the import
+statement. Instead, a lazy proxy object is created and bound to the
+name. The actual module is loaded on first use of that name.
+
+Lazy imports are only permitted at module scope. Using "lazy" inside a
+function, class body, or "try"/"except"/"finally" block raises a
+"SyntaxError". Star imports cannot be lazy ("lazy from module import
+*" is a syntax error), and future statements cannot be lazy.
+
+When using "lazy from ... import", each imported name is bound to a
+lazy proxy object. The first access to any of these names triggers
+loading of the entire module and resolves only that specific name to
+its actual value. Other names remain as lazy proxies until they are
+accessed.
+
+Example:
+
+   lazy import json
+   import sys
+
+   print('json' in sys.modules)  # False - json module not yet loaded
+
+   # First use triggers loading
+   result = json.dumps({"hello": "world"})
+
+   print('json' in sys.modules)  # True - now loaded
+
+If an error occurs during module loading (such as "ImportError" or
+"SyntaxError"), it is raised at the point where the lazy import is
+first used, not at the import statement itself.
+
+See **PEP 810** for the full specification of lazy imports.
+
+Added in version 3.14.
+
+
+Compatibility via "__lazy_modules__"
+====================================
+
+As an alternative to using the "lazy" keyword, a module can opt into
+lazy loading for specific imports by defining a module-level
+"__lazy_modules__" variable.  When present, it must be a container of
+fully qualified module name strings.  Any regular (non-"lazy")
+"import" statement at module scope whose target appears in
+"__lazy_modules__" is treated as a lazy import, exactly as if the
+"lazy" keyword had been used.
+
+This provides a way to enable lazy loading for specific dependencies
+without changing individual "import" statements. This is useful when
+supporting Python versions older than 3.14 while using lazy imports in
+3.14+:
+
+   __lazy_modules__ = ["json", "pathlib"]
+
+   import json     # loaded lazily (name is in __lazy_modules__)
+   import os       # loaded eagerly (name not in __lazy_modules__)
+
+   import pathlib  # loaded lazily
+
+Relative imports are resolved to their absolute name before the
+lookup, so "__lazy_modules__" must always contain fully qualified
+module names.
+
+For "from"-style imports, the relevant name is the module following
+"from", not the names of its members:
+
+   # In mypackage/mymodule.py
+   __lazy_modules__ = ["mypackage", "mypackage.sub.utils"]
+
+   from . import helper         # loaded lazily: . resolves to mypackage
+   from .sub.utils import func  # loaded lazily: .sub.utils resolves to mypackage.sub.utils
+   import json                  # loaded eagerly (not in __lazy_modules__)
+
+Imports inside functions, class bodies, or "try"/"except"/"finally"
+blocks are always eager, regardless of "__lazy_modules__".
+
+Added in version 3.14.
+''',
     'lists': r'''List displays
 *************
 

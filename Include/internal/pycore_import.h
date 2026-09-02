@@ -12,6 +12,29 @@ extern "C" {
 #include "pycore_hashtable.h"     // _Py_hashtable_t
 #include "pycore_interp_structs.h" // _import_state
 
+typedef struct {
+    PyObject *import_func;
+    int mode;
+    int startup_mode;
+    PyObject *filter;
+    PyObject *importing_modules;
+    PyObject *modules;
+    PyObject *pending_submodules;
+    PyObject *builtins_import_name;
+    PyObject *module_list_name;
+    PyObject *find_and_load_submodule_name;
+    PyObject *ast_is_lazy_name;
+#ifdef Py_GIL_DISABLED
+    PyMutex mutex;
+#endif
+} _PyLazyImportsState;
+
+static inline _PyLazyImportsState *
+_PyImport_GetLazyState(PyInterpreterState *interp)
+{
+    return (_PyLazyImportsState *)interp->_malloced;
+}
+
 extern int _PyImport_IsInitialized(PyInterpreterState *);
 
 // Export for 'pyexpat' shared extension
@@ -30,6 +53,25 @@ extern int _PyImport_FixupBuiltin(
     const char *name,            /* UTF-8 encoded string */
     PyObject *modules
     );
+
+extern PyObject * _PyImport_ResolveName(
+    PyThreadState *tstate, PyObject *name, PyObject *globals, int level);
+extern PyObject * _PyImport_GetAbsName(
+    PyThreadState *tstate, PyObject *name, PyObject *globals, int level);
+// Symbol is exported for the JIT on Windows builds.
+PyAPI_FUNC(PyObject *) _PyImport_LoadLazyImportTstate(
+    PyThreadState *tstate, PyObject *lazy_import);
+typedef enum {
+    _Py_LAZY_SUBMODULE_ERROR = -1,
+    _Py_LAZY_SUBMODULE_NOT_FOUND = 0,
+    _Py_LAZY_SUBMODULE_LOADED = 1,
+} _PyLazySubmoduleImportResult;
+extern _PyLazySubmoduleImportResult _PyImport_TryLoadLazySubmodule(
+    PyObject *mod_name, PyObject *attr_name, PyObject **result);
+extern PyObject * _PyImport_LazyImportModuleLevelObject(
+    PyThreadState *tstate, PyObject *name, PyObject *builtins,
+    PyObject *globals, PyObject *locals, PyObject *fromlist, int level);
+
 
 #ifdef HAVE_DLOPEN
 #  include <dlfcn.h>              // RTLD_NOW, RTLD_LAZY
@@ -68,8 +110,16 @@ extern void _PyImport_ClearModules(PyInterpreterState *interp);
 
 extern void _PyImport_ClearModulesByIndex(PyInterpreterState *interp);
 
+extern PyObject * _PyImport_InitLazyModules(
+    PyInterpreterState *interp);
+extern void _PyImport_ClearLazyModules(PyInterpreterState *interp);
+
 extern int _PyImport_InitDefaultImportFunc(PyInterpreterState *interp);
 extern int _PyImport_IsDefaultImportFunc(
+        PyInterpreterState *interp,
+        PyObject *func);
+
+extern int _PyImport_IsDefaultLazyImportFunc(
         PyInterpreterState *interp,
         PyObject *func);
 
@@ -88,6 +138,8 @@ extern PyObject * _PyImport_ImportlibModuleRepr(
 
 
 extern PyStatus _PyImport_Init(void);
+extern PyStatus _PyImport_ConfigureLazyImports(const PyConfig *config);
+extern void _PyImport_ApplyLazyImportsConfig(void);
 extern void _PyImport_Fini(void);
 extern void _PyImport_Fini2(void);
 

@@ -16,6 +16,10 @@ extern int _PyModule_IsPossiblyShadowing(PyObject *);
 
 extern int _PyModule_IsExtension(PyObject *obj);
 
+extern int _PyModule_InitModuleDictWatcher(PyInterpreterState *interp);
+
+typedef int (*_Py_modexecfunc)(PyObject *);
+
 typedef struct {
     PyObject_HEAD
     PyObject *md_dict;

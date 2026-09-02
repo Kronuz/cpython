@@ -348,6 +348,8 @@ The following implementation-specific options are available:\n\
          log imports of already-loaded modules; also PYTHONPROFILEIMPORTTIME\n\
 -X int_max_str_digits=N: limit the size of int<->str conversions;\n\
          0 disables the limit; also PYTHONINTMAXSTRDIGITS\n\
+-X lazy_imports=[all|normal]: control global lazy imports;\n\
+         default is normal; also PYTHON_LAZY_IMPORTS\n\
 -X no_debug_ranges: don't include extra location information in code objects;\n\
          also PYTHONNODEBUGRANGES\n\
 -X perf: support the Linux \"perf\" profiler; also PYTHONPERFSUPPORT=1\n\
@@ -446,6 +448,7 @@ static const char usage_envvars[] =
 "PYTHONINSPECT   : inspect interactively after running script (-i)\n"
 "PYTHONINTMAXSTRDIGITS: limit the size of int<->str conversions;\n"
 "                  0 disables the limit (-X int_max_str_digits=N)\n"
+"PYTHON_LAZY_IMPORTS: control global lazy imports (-X lazy_imports)\n"
 "PYTHONNODEBUGRANGES: don't include extra location information in code objects\n"
 "                  (-X no_debug_ranges)\n"
 "PYTHONNOUSERSITE: disable user site directory (-s)\n"
@@ -2311,6 +2314,29 @@ config_init_import_time(PyConfig *config)
 }
 
 static PyStatus
+config_validate_lazy_imports(const PyConfig *config)
+{
+    const char *env = config_get_env(config, "PYTHON_LAZY_IMPORTS");
+    if (env != NULL &&
+        strcmp(env, "all") != 0 &&
+        strcmp(env, "normal") != 0)
+    {
+        return _PyStatus_ERR("PYTHON_LAZY_IMPORTS: invalid value; "
+                             "expected 'all' or 'normal'");
+    }
+
+    const wchar_t *value = config_get_xoption_value(config, L"lazy_imports");
+    if (value != NULL &&
+        wcscmp(value, L"all") != 0 &&
+        wcscmp(value, L"normal") != 0)
+    {
+        return _PyStatus_ERR("-X lazy_imports: invalid value; "
+                             "expected 'all' or 'normal'");
+    }
+    return _PyStatus_OK();
+}
+
+static PyStatus
 config_read_complex_options(PyConfig *config)
 {
     /* More complex options configured by env var and -X option */
@@ -2331,6 +2357,11 @@ config_read_complex_options(PyConfig *config)
         if (_PyStatus_EXCEPTION(status)) {
             return status;
         }
+    }
+
+    status = config_validate_lazy_imports(config);
+    if (_PyStatus_EXCEPTION(status)) {
+        return status;
     }
 
     if (config->tracemalloc < 0) {
