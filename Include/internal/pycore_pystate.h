@@ -234,6 +234,11 @@ PyAPI_FUNC(PyObject*) _PyThreadState_GetDict(PyThreadState *tstate);
 */
 extern PyObject* _PyThread_CurrentExceptions(void);
 
+/* The implementation of sys._current_loops()  Returns a dict mapping
+   thread id to that thread's current asyncio loop.
+*/
+extern PyObject* _PyThread_CurrentLoops(void);
+
 
 /* Other */
 
