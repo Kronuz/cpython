@@ -21,15 +21,18 @@ patch carries in its own header.
 
 ## Digging deeper
 
-- **`AGENTS.md`** is the entry point for working here: the ABI rule that shapes
-  every patch, how to verify a branch, and what not to do. Start here if you are an
-  agent.
-- **`docs/methodology.md`** is the ABI and performance testing discipline, and why
-  it is the way it is.
-- **`docs/`** has a deep dive per feature: `allocated-bytes.md`, `gc-stats.md`,
-  `current-loops.md`, `lazy-imports.md`.
-- **`tools/`** carries `abi-check.py`, `abi-witness.py` and `perf-compare.py`, so
-  you can check a change yourself. They depend on nothing outside this repository.
+- [`AGENTS.md`](AGENTS.md) is the entry point for working here: the ABI rule that
+  shapes every patch, how to verify a branch, and what not to do. Start here if you
+  are an agent.
+- [`docs/methodology.md`](docs/methodology.md) is the ABI and performance testing
+  discipline, and why it is the way it is.
+- Per-feature deep dives: [`allocated-bytes`](docs/allocated-bytes.md),
+  [`gc-stats`](docs/gc-stats.md), [`current-loops`](docs/current-loops.md),
+  [`lazy-imports`](docs/lazy-imports.md).
+- [`tools/`](tools) carries [`abi-check.py`](tools/abi-check.py),
+  [`abi-witness.py`](tools/abi-witness.py) and
+  [`perf-compare.py`](tools/perf-compare.py), so you can check a change yourself.
+  They depend on nothing outside this repository.
 
 ## Lazy Imports
 
@@ -40,6 +43,8 @@ Two implementations live here, and the split is worth knowing:
 - The standard itself, **PEP 810 (Explicit Lazy Imports)**, as it landed
   upstream, backported on
   [`3.14-lazy-imports`](https://github.com/Kronuz/cpython/tree/3.14-lazy-imports).
+
+Full notes: [docs/lazy-imports.md](docs/lazy-imports.md).
 
 ### Original implementation (historical)
 
@@ -83,7 +88,7 @@ forward to 3.12.11. The large tree diff between them is entirely the upstream
 ## Allocation accounting (sys)
 
 Python-visible byte accounting for the allocator, in two generations. The second
-is a redesign of the first.
+is a redesign of the first. Full notes: [docs/allocated-bytes.md](docs/allocated-bytes.md).
 
 ### [`sys__getallocatedbytes`](https://github.com/Kronuz/cpython/tree/sys__getallocatedbytes), the original (3.12, historical)
 
@@ -122,7 +127,7 @@ Each is a release tag plus one commit.
 
 ### GC statistics: [`3.12-gc-stats`](https://github.com/Kronuz/cpython/tree/3.12-gc-stats), [`3.13-gc-stats`](https://github.com/Kronuz/cpython/tree/3.13-gc-stats), [`3.14-gc-stats`](https://github.com/Kronuz/cpython/tree/3.14-gc-stats)
 
-Bases v3.12.13, v3.13.15, v3.14.7.
+Bases v3.12.13, v3.13.15, v3.14.7. Full notes: [docs/gc-stats.md](docs/gc-stats.md).
 
 - **What.** A preallocated ring of recent collections (generation, start and stop
   timestamps, objects examined and collected, live heap size), `candidates` and
@@ -139,7 +144,7 @@ Bases v3.12.13, v3.13.15, v3.14.7.
 
 ### asyncio loops: [`3.14-current-loops`](https://github.com/Kronuz/cpython/tree/3.14-current-loops)
 
-Base v3.14.7.
+Base v3.14.7. Full notes: [docs/current-loops.md](docs/current-loops.md).
 
 - **What.** `sys._current_loops()`, a dict mapping each thread id to the asyncio
   loop running on it, read from `_PyThreadStateImpl.asyncio_running_loop` (where
