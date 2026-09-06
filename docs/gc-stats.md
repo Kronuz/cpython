@@ -52,3 +52,14 @@ that can compile to a no-op if the header it needs was not actually reachable.
 ## Remove when
 
 This line reaches 3.15, which ships gcmon.
+
+## Upstream parity
+
+Last fully checked against the 3.15 tip at **v3.15.0rc2** (`435c9e5a`) on
+2026-09-06. The gcmon surface (the ring, `get_gc_stats`, the `gc.get_stats()`
+keys, and the free-threaded lock at `8b1dbb17540`) has no follow-ups since the
+backport point. Three later free-threaded GC fixes (`gh-150411`, `gh-156395`,
+`gh-149816`) touch neighboring code but are 3.15/main-only, absent from the 3.12
+through 3.14 branches, and reach a 3.15 build through its base rather than through
+this patch (`gh-156395` touches `_testcapi` and free-threaded GC, not the gcmon
+readers). Next check starts from `435c9e5a`.

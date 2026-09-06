@@ -44,3 +44,13 @@ data directory in the build's installed test set, or the test passes in the buil
 and fails on the installed interpreter.
 
 **Remove when.** This line reaches 3.15, which ships PEP 810.
+
+## Upstream parity
+
+Last fully checked against the 3.15 tip at **v3.15.0rc2** (`435c9e5a`) on
+2026-09-06. The feature core (`Objects/lazyimportobject.c`,
+`Include/internal/pycore_lazyimportobject.h`) is unchanged on both the 3.15 branch
+and main since the backport point (`57dface7588a`, 2026-08-19). The only newer
+lazy-imports commit on 3.15, `GH-156624` (enable linting of the lazy-import tests,
+2026-08-30), is 3.15-only and does not apply to the 3.12 through 3.14 backports.
+Next check starts from `435c9e5a`.
