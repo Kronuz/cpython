@@ -24,6 +24,14 @@ struct _gc_thread_state {
 // Every PyThreadState is actually allocated as a _PyThreadStateImpl. The
 // PyThreadState fields are exposed as part of the C API, although most fields
 // are intended to be private. The _PyThreadStateImpl fields not exposed.
+/* Per-thread allocation counters.  See the block at the top of
+   Objects/obmalloc.c for why they live here and how they are read.  Both only
+   ever rise; the live figure is the difference taken by the readers. */
+typedef struct {
+    Py_ssize_t alloc_bytes;
+    Py_ssize_t freed_bytes;
+} _PyAlloc_Acc;
+
 typedef struct _PyThreadStateImpl {
     // semi-public fields are in PyThreadState.
     PyThreadState base;
@@ -85,6 +93,10 @@ typedef struct _PyThreadStateImpl {
     // cache line with other allocations.
     char __padding[64];
 #endif
+    /* Allocation counters; see Objects/obmalloc.c.  Deliberately the last
+       member: every field above keeps the offset it has in an unpatched tree,
+       so the only layout change is that the struct grows at its tail. */
+    _PyAlloc_Acc allocated;
 } _PyThreadStateImpl;
 
 #ifdef __cplusplus

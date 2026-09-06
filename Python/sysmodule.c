@@ -2821,7 +2821,47 @@ PyAPI_FUNC(int) PyUnstable_CopyPerfMapFile(const char* parent_filename) {
 }
 
 
+static PyObject *
+sys_getallocatedbytes(PyObject *self, PyObject *Py_UNUSED(ignored))
+{
+    return PyLong_FromSsize_t(
+        _Py_GetGlobalAllocatedBytes());
+}
+
+static PyObject *
+sys_gettotalallocatedbytes(PyObject *self, PyObject *Py_UNUSED(ignored))
+{
+    return PyLong_FromSsize_t(_Py_GetTotalAllocatedBytes());
+}
+
+static PyObject *
+sys_current_allocated_bytes(PyObject *self, PyObject *Py_UNUSED(ignored))
+{
+    return _Py_GetAllocatedBytesByThread();
+}
+
 static PyMethodDef sys_methods[] = {
+    {"getallocatedbytes", sys_getallocatedbytes, METH_NOARGS,
+     PyDoc_STR("getallocatedbytes($module, /)\n--\n\n"
+               "Return the bytes currently allocated by CPython's allocators.\n\n"
+               "Spans the object domain and the raw domain, so a block obtained\n"
+               "with PyMem_RawMalloc() is counted too.  Memory a C library takes\n"
+               "straight from malloc() is not, so this is not process memory.\n\n"
+               "This is not a constant-time read: it sums per-thread counters\n"
+               "under a lock, so the cost grows with the number of live thread\n"
+               "states.  Sample it accordingly on large multithreaded processes.")},
+    {"gettotalallocatedbytes", sys_gettotalallocatedbytes, METH_NOARGS,
+     PyDoc_STR("gettotalallocatedbytes($module, /)\n--\n\n"
+               "Return the cumulative bytes ever allocated, across every thread.\n\n"
+               "Only ever rises, so the difference between two readings is an\n"
+               "allocation rate.")},
+    {"_current_allocated_bytes", sys_current_allocated_bytes, METH_NOARGS,
+     PyDoc_STR("_current_allocated_bytes($module, /)\n--\n\n"
+               "Return a dict mapping each thread's id to the cumulative bytes\n"
+               "it has allocated.\n\n"
+               "Keyed as sys._current_frames() keys its own dict, so the two\n"
+               "snapshots join: one says how much a thread allocated, the other\n"
+               "says where that thread is.")},
     /* Might as well keep this in alphabetic order */
     SYS_ADDAUDITHOOK_METHODDEF
     SYS_AUDIT_METHODDEF

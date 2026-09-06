@@ -1876,6 +1876,10 @@ tstate_delete_common(PyThreadState *tstate, int release_gil)
     _PyRuntimeState *runtime = interp->runtime;
 
     HEAD_LOCK(runtime);
+    /* Fold this thread's allocation counters into the process-wide retired
+       accumulator before it leaves the list, so a concurrent reader sees the
+       bytes in exactly one place and never sees the total dip. */
+    _PyAlloc_RetireThreadState((_PyThreadStateImpl *)tstate);
     if (tstate->prev) {
         tstate->prev->next = tstate->next;
     }

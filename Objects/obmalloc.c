@@ -8,10 +8,307 @@
 #include "pycore_pyerrors.h"      // _Py_FatalErrorFormat()
 #include "pycore_pymem.h"
 #include "pycore_pystate.h"       // _PyInterpreterState_GET
+#include "pycore_tstate.h"        // _PyThreadStateImpl
 #include "pycore_stats.h"         // OBJECT_STAT_INC_COND()
 
 #include <stdlib.h>               // malloc()
 #include <stdbool.h>
+
+/* Size of a block owned by the system allocator, without a header. Both
+   spellings are O(1) reads of the allocator's own bookkeeping. */
+#if defined(__APPLE__)
+#  include <malloc/malloc.h>
+#  define USABLE_SIZE(p) malloc_size(p)
+#elif defined(__linux__)
+#  include <malloc.h>
+#  define USABLE_SIZE(p) malloc_usable_size(p)
+#else
+#  define USABLE_SIZE(p) ((size_t)0)
+#endif
+
+/* ---------------------------------------------------------------------------
+ * Allocation counters, kept in _PyThreadStateImpl -- the internal struct that
+ * every PyThreadState is really allocated as.  Fields added there move no
+ * public offset, because PyThreadState is its first member and nothing outside
+ * CPython sees the rest.
+ *
+ * A thread's counters live and die with its thread state, so there is no slot
+ * table, no ceiling and no shared overflow slot: a counter has exactly one
+ * writer for its whole life, and every update on the hot path is a plain add.
+ *
+ * Allocations made with no thread state -- early init, late finalization, and
+ * PyMem_RawMalloc() from a foreign thread -- are charged to a fake thread
+ * state rather than branched around, so the hot path has no test beyond the
+ * conditional move that produces the pointer.  Those counters really are
+ * shared and really are unsynchronised, for the same reason CPython leaves
+ * its own raw_allocated_blocks unsynchronised there.
+ *
+ * At thread exit the counters are folded into a process-wide retired
+ * accumulator under the same lock that unlinks the thread state, so a global
+ * reading never double-counts a thread, never loses one, and never goes
+ * backwards.
+ * ------------------------------------------------------------------------ */
+/* Charged when there is no thread state to charge.  Unlike a thread's own
+   accumulator, which has exactly one writer and so can only be read stale,
+   this one is shared by every thread that reaches the allocator without a
+   thread state.  A concurrent read-modify-write on it loses updates outright,
+   so its counters are written with a relaxed fetch-add.  Relaxed is enough:
+   they are summed, never used to order anything. */
+static _PyThreadStateImpl _PyAlloc_no_tstate;
+
+/* True for the one accumulator with more than one writer.  The builtin rather
+   than _Py_atomic_add_ssize() because 3.12 has no fetch-add, and one spelling
+   keeps the three versions of this patch identical here. */
+static inline int
+_PyAlloc_is_shared(const _PyAlloc_Acc *acc)
+{
+    return acc == &_PyAlloc_no_tstate.allocated;
+}
+
+/* Threads that have exited.  Written at thread exit and read by a global
+   reading, both under the thread list lock, so plain arithmetic is enough:
+   there is no unlocked path to this accumulator on any build. */
+static _PyAlloc_Acc _PyAlloc_retired;
+
+/* Callers hand in the thread state they have already resolved.  In a shared
+   build _PyThreadState_GET() is a __tls_get_addr() call, and a second one on
+   the allocator hot path costs about 5%.  The NULL test is a conditional move. */
+static inline _PyAlloc_Acc *
+_PyAlloc_acc_of(PyThreadState *tstate)
+{
+    if (tstate == NULL) {
+        tstate = (PyThreadState *)&_PyAlloc_no_tstate;
+    }
+    return &((_PyThreadStateImpl *)tstate)->allocated;
+}
+
+static inline _PyAlloc_Acc *
+_PyAlloc_acc(void)
+{
+    return _PyAlloc_acc_of(_PyThreadState_GET());
+}
+
+static inline void
+_PyAlloc_charge_of(_PyAlloc_Acc *acc, Py_ssize_t nbytes)
+{
+    if (_PyAlloc_is_shared(acc)) {
+        __atomic_fetch_add(&acc->alloc_bytes, nbytes, __ATOMIC_RELAXED);
+        return;
+    }
+    acc->alloc_bytes += nbytes;
+}
+
+static inline void
+_PyAlloc_charge(Py_ssize_t nbytes)
+{
+    _PyAlloc_charge_of(_PyAlloc_acc(), nbytes);
+}
+
+static inline void
+_PyAlloc_release_of(_PyAlloc_Acc *acc, Py_ssize_t nbytes)
+{
+    if (_PyAlloc_is_shared(acc)) {
+        __atomic_fetch_add(&acc->freed_bytes, nbytes, __ATOMIC_RELAXED);
+        return;
+    }
+    acc->freed_bytes += nbytes;
+}
+
+static inline void
+_PyAlloc_release(Py_ssize_t nbytes)
+{
+    _PyAlloc_release_of(_PyAlloc_acc(), nbytes);
+}
+
+/* A realloc changes a block's size rather than creating or destroying one,
+   so it moves bytes between the two counters: growing is an allocation of the
+   difference, shrinking is a free of it. */
+static inline void
+_PyAlloc_resize_of(_PyAlloc_Acc *acc, Py_ssize_t grew)
+{
+    if (grew > 0) {
+        _PyAlloc_charge_of(acc, grew);
+    }
+    else {
+        _PyAlloc_release_of(acc, -grew);
+    }
+}
+
+static inline void
+_PyAlloc_resize(Py_ssize_t grew)
+{
+    _PyAlloc_resize_of(_PyAlloc_acc(), grew);
+}
+
+/* Folded at thread exit, under the lock that unlinks the thread state.  The
+   thread is on its way out and cannot still be writing its own counters. */
+void
+_PyAlloc_RetireThreadState(_PyThreadStateImpl *tstate)
+{
+    _PyAlloc_Acc *acc = &tstate->allocated;
+    _PyAlloc_retired.alloc_bytes += acc->alloc_bytes;
+    _PyAlloc_retired.freed_bytes += acc->freed_bytes;
+    acc->alloc_bytes = 0;
+    acc->freed_bytes = 0;
+}
+
+/* Sums the retired accumulator, the no-thread-state accumulator and every live
+   thread state, across every interpreter.  Walks the threads that exist rather
+   than a fixed table, so the cost tracks the process rather than a ceiling. */
+static void
+_PyAlloc_sum(_PyAlloc_Acc *out)
+{
+    _PyRuntimeState *runtime = &_PyRuntime;
+    HEAD_LOCK(runtime);
+    /* The retired accumulator is read inside the same critical section that
+       walks the live thread states, because a thread folds its counters into
+       it and unlinks itself under this one lock.  Reading it outside makes
+       the two halves separate observations, and a thread that retires between
+       them is counted in neither: the reading dips.  A GIL build hides that
+       -- an exiting thread cannot run while a reader holds the GIL -- so it
+       shows up only on a free-threaded build, which is where it was found. */
+    *out = _PyAlloc_retired;
+    out->alloc_bytes += __atomic_load_n(
+        &_PyAlloc_no_tstate.allocated.alloc_bytes, __ATOMIC_RELAXED);
+    out->freed_bytes += __atomic_load_n(
+        &_PyAlloc_no_tstate.allocated.freed_bytes, __ATOMIC_RELAXED);
+
+    for (PyInterpreterState *interp = PyInterpreterState_Head();
+         interp != NULL;
+         interp = PyInterpreterState_Next(interp))
+    {
+        /* The thread list, walked directly rather than through
+           PyInterpreterState_ThreadHead(): those are cross-translation-unit
+           calls, and this loop runs once per live thread per read.  Both
+           fields exist unchanged in every version this patch targets. */
+        for (PyThreadState *t = interp->threads.head;
+             t != NULL;
+             t = t->next)
+        {
+            _PyAlloc_Acc *acc = &((_PyThreadStateImpl *)t)->allocated;
+            out->alloc_bytes += acc->alloc_bytes;
+            out->freed_bytes += acc->freed_bytes;
+        }
+    }
+    HEAD_UNLOCK(runtime);
+}
+
+/* Live bytes are the difference of two monotonic counters, summed so that a
+   block allocated on one thread and freed on another nets out to zero. */
+static Py_ssize_t
+_PyAlloc_total_bytes(void)
+{
+    _PyAlloc_Acc acc;
+    _PyAlloc_sum(&acc);
+    return acc.alloc_bytes - acc.freed_bytes;
+}
+
+/* Every thread's cumulative total, including threads that have exited: their
+   counters are folded into the retired accumulator, so their work is still
+   counted and this figure still only ever rises. */
+Py_ssize_t
+_Py_GetTotalAllocatedBytes(void)
+{
+    _PyAlloc_Acc acc;
+    _PyAlloc_sum(&acc);
+    return acc.alloc_bytes;
+}
+
+/* {thread id: cumulative bytes}, keyed exactly as sys._current_frames() keys
+   its own dict so the two snapshots join.  Only live threads appear, for the
+   same reason only live threads appear there: an exited thread has no stack to
+   join to, and its bytes are still in the process-wide total.
+
+   The snapshot buffer comes from libc malloc() rather than PyMem_RawMalloc().
+   The raw domain is charged, so growing the buffer through it would land on
+   the calling thread's counter partway through the walk and inflate the very
+   figure this function reports.  Bare malloc() is outside every charged
+   domain -- the same reason _PyMem_ArenaAlloc() uses it -- so building the
+   dict cannot perturb what it reports. */
+PyObject *
+_Py_GetAllocatedBytesByThread(void)
+{
+    struct _PyAlloc_snap { unsigned long tid; Py_ssize_t total; } *snap = NULL;
+    size_t count = 0, capacity = 0;
+    _PyRuntimeState *runtime = &_PyRuntime;
+
+    HEAD_LOCK(runtime);
+    for (PyInterpreterState *interp = PyInterpreterState_Head();
+         interp != NULL;
+         interp = PyInterpreterState_Next(interp))
+    {
+        /* The thread list, walked directly rather than through
+           PyInterpreterState_ThreadHead(): those are cross-translation-unit
+           calls, and this loop runs once per live thread per read.  Both
+           fields exist unchanged in every version this patch targets. */
+        for (PyThreadState *t = interp->threads.head;
+             t != NULL;
+             t = t->next)
+        {
+            if (count == capacity) {
+                size_t newcap = capacity ? capacity * 2 : 32;
+                void *grown = realloc(snap, newcap * sizeof(*snap));
+                if (grown == NULL) {
+                    HEAD_UNLOCK(runtime);
+                    free(snap);
+                    return PyErr_NoMemory();
+                }
+                snap = (struct _PyAlloc_snap *)grown;
+                capacity = newcap;
+            }
+            snap[count].tid = t->thread_id;
+            snap[count].total = ((_PyThreadStateImpl *)t)->allocated.alloc_bytes;
+            count++;
+        }
+    }
+    HEAD_UNLOCK(runtime);
+
+    PyObject *result = PyDict_New();
+    if (result == NULL) {
+        free(snap);
+        return NULL;
+    }
+    for (size_t i = 0; i < count; i++) {
+        if (snap[i].tid == 0) {
+            continue;  /* never bound to an OS thread */
+        }
+        PyObject *key = PyLong_FromUnsignedLong(snap[i].tid);
+        if (key == NULL) {
+            goto error;
+        }
+        /* One thread can hold a thread state per interpreter, and they share
+           an id.  Sum them: the value for an id then still only ever rises,
+           which is the property a rate consumer depends on. */
+        Py_ssize_t total = snap[i].total;
+        PyObject *prev = PyDict_GetItemWithError(result, key);
+        if (prev != NULL) {
+            total += PyLong_AsSsize_t(prev);
+        }
+        else if (PyErr_Occurred()) {
+            Py_DECREF(key);
+            goto error;
+        }
+        PyObject *val = PyLong_FromSsize_t(total);
+        if (val == NULL) {
+            Py_DECREF(key);
+            goto error;
+        }
+        int rc = PyDict_SetItem(result, key, val);
+        Py_DECREF(key);
+        Py_DECREF(val);
+        if (rc < 0) {
+            goto error;
+        }
+    }
+    free(snap);
+    return result;
+
+error:
+    free(snap);
+    Py_DECREF(result);
+    return NULL;
+}
+
 #ifdef WITH_MIMALLOC
 // Forward declarations of functions used in our mimalloc modifications
 static void _PyMem_mi_page_clear_qsbr(mi_page_t *page);
@@ -60,7 +357,11 @@ _PyMem_RawMalloc(void *Py_UNUSED(ctx), size_t size)
        To solve these problems, allocate an extra byte. */
     if (size == 0)
         size = 1;
-    return malloc(size);
+    void *ptr = malloc(size);
+    if (ptr != NULL) {
+        _PyAlloc_charge((Py_ssize_t)USABLE_SIZE(ptr));
+    }
+    return ptr;
 }
 
 void *
@@ -74,7 +375,11 @@ _PyMem_RawCalloc(void *Py_UNUSED(ctx), size_t nelem, size_t elsize)
         nelem = 1;
         elsize = 1;
     }
-    return calloc(nelem, elsize);
+    void *ptr = calloc(nelem, elsize);
+    if (ptr != NULL) {
+        _PyAlloc_charge((Py_ssize_t)USABLE_SIZE(ptr));
+    }
+    return ptr;
 }
 
 void *
@@ -82,12 +387,30 @@ _PyMem_RawRealloc(void *Py_UNUSED(ctx), void *ptr, size_t size)
 {
     if (size == 0)
         size = 1;
-    return realloc(ptr, size);
+    /* realloc(NULL, n) is a malloc, so it is charged rather than resized.
+       -1 is the "there was no old block" sentinel, matching the convention
+       mi_charge_realloc() uses on the mimalloc side. */
+    Py_ssize_t old_size = (ptr != NULL) ? (Py_ssize_t)USABLE_SIZE(ptr) : -1;
+    void *ptr2 = realloc(ptr, size);
+    if (ptr2 != NULL) {
+        if (old_size < 0) {
+            _PyAlloc_charge((Py_ssize_t)USABLE_SIZE(ptr2));
+        }
+        else {
+            _PyAlloc_resize((Py_ssize_t)USABLE_SIZE(ptr2) - old_size);
+        }
+    }
+    return ptr2;
 }
 
 void
 _PyMem_RawFree(void *Py_UNUSED(ctx), void *ptr)
 {
+    /* free(NULL) is a no-op and must not be released, or the counters drift
+       down by one block's worth for every such call. */
+    if (ptr != NULL) {
+        _PyAlloc_release((Py_ssize_t)USABLE_SIZE(ptr));
+    }
     free(ptr);
 }
 
@@ -253,13 +576,64 @@ _PyMem_mi_heap_collect_qsbr(mi_heap_t *heap)
 #endif
 }
 
+#ifdef Py_GIL_DISABLED
+/* Charge to the calling thread, which owns its own fields exclusively, so the
+   hot path needs no atomic. */
+static inline void
+mi_charge(_PyAlloc_Acc *acc, void *p, int sign)
+{
+    if (p == NULL) {
+        return;
+    }
+    Py_ssize_t size = (Py_ssize_t)mi_usable_size(p);
+    if (sign > 0) {
+        _PyAlloc_charge_of(acc, size);
+    }
+    else {
+        _PyAlloc_release_of(acc, size);
+    }
+}
+
+/* A realloc is not a fresh allocation, so it must not charge total_bytes the
+   whole new size the way mi_charge(acc, ptr, 1) would: total_bytes only ever
+   rises, and a loop reallocing one buffer through many small growths would
+   otherwise inflate it far past what was ever newly allocated. Matches
+   _PyAlloc_resize's delta-only semantics on the pymalloc side. old_size is
+   negative exactly when this is realloc(NULL, size), i.e. a fresh allocation,
+   in which case grew already equals the full new size. new_ptr is NULL
+   exactly when realloc failed, in which case the old block is still live and
+   untouched, so there is nothing to charge or discharge.
+
+   old_size must be sampled by the caller *before* the realloc: mimalloc
+   frees the old block and returns a new pointer whenever the block changes
+   size class, so reading mi_usable_size(old_ptr) afterwards would be a
+   use-after-free. The pymalloc path already samples its size up front. */
+static inline void
+mi_charge_realloc(_PyAlloc_Acc *acc, Py_ssize_t old_size, void *new_ptr)
+{
+    if (new_ptr == NULL) {
+        return;
+    }
+    Py_ssize_t new_size = (Py_ssize_t)mi_usable_size(new_ptr);
+    if (old_size < 0) {
+        /* A fresh allocation: the whole new size is newly allocated. */
+        _PyAlloc_charge_of(acc, new_size);
+        return;
+    }
+    /* A resize moves bytes between the two counters. */
+    _PyAlloc_resize_of(acc, new_size - old_size);
+}
+#endif
+
 void *
 _PyMem_MiMalloc(void *ctx, size_t size)
 {
 #ifdef Py_GIL_DISABLED
     _PyThreadStateImpl *tstate = (_PyThreadStateImpl *)_PyThreadState_GET();
     mi_heap_t *heap = &tstate->mimalloc.heaps[_Py_MIMALLOC_HEAP_MEM];
-    return mi_heap_malloc(heap, size);
+    void *allocated = mi_heap_malloc(heap, size);
+    mi_charge(_PyAlloc_acc_of(&tstate->base), allocated, 1);
+    return allocated;
 #else
     return mi_malloc(size);
 #endif
@@ -271,7 +645,9 @@ _PyMem_MiCalloc(void *ctx, size_t nelem, size_t elsize)
 #ifdef Py_GIL_DISABLED
     _PyThreadStateImpl *tstate = (_PyThreadStateImpl *)_PyThreadState_GET();
     mi_heap_t *heap = &tstate->mimalloc.heaps[_Py_MIMALLOC_HEAP_MEM];
-    return mi_heap_calloc(heap, nelem, elsize);
+    void *allocated = mi_heap_calloc(heap, nelem, elsize);
+    mi_charge(_PyAlloc_acc_of(&tstate->base), allocated, 1);
+    return allocated;
 #else
     return mi_calloc(nelem, elsize);
 #endif
@@ -283,7 +659,10 @@ _PyMem_MiRealloc(void *ctx, void *ptr, size_t size)
 #ifdef Py_GIL_DISABLED
     _PyThreadStateImpl *tstate = (_PyThreadStateImpl *)_PyThreadState_GET();
     mi_heap_t *heap = &tstate->mimalloc.heaps[_Py_MIMALLOC_HEAP_MEM];
-    return mi_heap_realloc(heap, ptr, size);
+    Py_ssize_t old_size = (ptr != NULL) ? (Py_ssize_t)mi_usable_size(ptr) : -1;
+    void *allocated = mi_heap_realloc(heap, ptr, size);
+    mi_charge_realloc(_PyAlloc_acc_of(&tstate->base), old_size, allocated);
+    return allocated;
 #else
     return mi_realloc(ptr, size);
 #endif
@@ -292,6 +671,9 @@ _PyMem_MiRealloc(void *ctx, void *ptr, size_t size)
 void
 _PyMem_MiFree(void *ctx, void *ptr)
 {
+#ifdef Py_GIL_DISABLED
+    mi_charge(_PyAlloc_acc(), ptr, -1);
+#endif
     mi_free(ptr);
 }
 
@@ -301,7 +683,9 @@ _PyObject_MiMalloc(void *ctx, size_t nbytes)
 #ifdef Py_GIL_DISABLED
     _PyThreadStateImpl *tstate = (_PyThreadStateImpl *)_PyThreadState_GET();
     mi_heap_t *heap = tstate->mimalloc.current_object_heap;
-    return mi_heap_malloc(heap, nbytes);
+    void *allocated = mi_heap_malloc(heap, nbytes);
+    mi_charge(_PyAlloc_acc_of(&tstate->base), allocated, 1);
+    return allocated;
 #else
     return mi_malloc(nbytes);
 #endif
@@ -313,7 +697,9 @@ _PyObject_MiCalloc(void *ctx, size_t nelem, size_t elsize)
 #ifdef Py_GIL_DISABLED
     _PyThreadStateImpl *tstate = (_PyThreadStateImpl *)_PyThreadState_GET();
     mi_heap_t *heap = tstate->mimalloc.current_object_heap;
-    return mi_heap_calloc(heap, nelem, elsize);
+    void *allocated = mi_heap_calloc(heap, nelem, elsize);
+    mi_charge(_PyAlloc_acc_of(&tstate->base), allocated, 1);
+    return allocated;
 #else
     return mi_calloc(nelem, elsize);
 #endif
@@ -326,7 +712,10 @@ _PyObject_MiRealloc(void *ctx, void *ptr, size_t nbytes)
 #ifdef Py_GIL_DISABLED
     _PyThreadStateImpl *tstate = (_PyThreadStateImpl *)_PyThreadState_GET();
     mi_heap_t *heap = tstate->mimalloc.current_object_heap;
-    return mi_heap_realloc(heap, ptr, nbytes);
+    Py_ssize_t old_size = (ptr != NULL) ? (Py_ssize_t)mi_usable_size(ptr) : -1;
+    void *allocated = mi_heap_realloc(heap, ptr, nbytes);
+    mi_charge_realloc(_PyAlloc_acc_of(&tstate->base), old_size, allocated);
+    return allocated;
 #else
     return mi_realloc(ptr, nbytes);
 #endif
@@ -335,6 +724,9 @@ _PyObject_MiRealloc(void *ctx, void *ptr, size_t nbytes)
 void
 _PyObject_MiFree(void *ctx, void *ptr)
 {
+#ifdef Py_GIL_DISABLED
+    mi_charge(_PyAlloc_acc(), ptr, -1);
+#endif
     mi_free(ptr);
 }
 
@@ -1564,11 +1956,17 @@ has_own_state(PyInterpreterState *interp)
 }
 
 static inline OMState *
-get_state(void)
+get_state_of(PyThreadState *tstate)
 {
-    PyInterpreterState *interp = _PyInterpreterState_GET();
+    PyInterpreterState *interp = tstate->interp;
     assert(interp->obmalloc != NULL); // otherwise not initialized or freed
     return interp->obmalloc;
+}
+
+static inline OMState *
+get_state(void)
+{
+    return get_state_of(_PyThreadState_GET());
 }
 
 // These macros all rely on a local "state" variable.
@@ -1618,6 +2016,16 @@ get_mimalloc_allocated_blocks(PyInterpreterState *interp)
     return allocated_blocks;
 }
 #endif
+
+/* Counters live in the thread states themselves, with exited threads folded
+   into a process-wide retired accumulator, so this sums every thread that has
+   allocated whether or not it is still alive, whichever allocator it used.
+   Nothing here is scoped to one interpreter. */
+Py_ssize_t
+_Py_GetGlobalAllocatedBytes(void)
+{
+    return _PyAlloc_total_bytes();
+}
 
 Py_ssize_t
 _PyInterpreterState_GetAllocatedBlocks(PyInterpreterState *interp)
@@ -2278,7 +2686,8 @@ allocate_from_new_pool(OMState *state, uint size)
    or when the max memory limit has been reached.
 */
 static inline void*
-pymalloc_alloc(OMState *state, void *Py_UNUSED(ctx), size_t nbytes)
+pymalloc_alloc(OMState *state, _PyAlloc_Acc *acc, void *Py_UNUSED(ctx),
+               size_t nbytes)
 {
 #ifdef WITH_VALGRIND
     if (UNLIKELY(running_on_valgrind == -1)) {
@@ -2319,8 +2728,18 @@ pymalloc_alloc(OMState *state, void *Py_UNUSED(ctx), size_t nbytes)
          * available:  use a free pool.
          */
         bp = allocate_from_new_pool(state, size);
+        if (UNLIKELY(bp == NULL)) {
+            /* Out of arenas.  Charge nothing: _PyObject_Malloc() falls back
+               to PyMem_RawMalloc(), and the raw allocator charges what it
+               returns.
+               Charging here would either strand the bytes forever when the
+               fallback also fails, or count the same block twice when it
+               succeeds. */
+            return NULL;
+        }
     }
 
+    _PyAlloc_charge_of(acc, (Py_ssize_t)INDEX2SIZE(size));
     return (void *)bp;
 }
 
@@ -2328,8 +2747,9 @@ pymalloc_alloc(OMState *state, void *Py_UNUSED(ctx), size_t nbytes)
 void *
 _PyObject_Malloc(void *ctx, size_t nbytes)
 {
-    OMState *state = get_state();
-    void* ptr = pymalloc_alloc(state, ctx, nbytes);
+    PyThreadState *tstate = _PyThreadState_GET();
+    OMState *state = get_state_of(tstate);
+    void* ptr = pymalloc_alloc(state, _PyAlloc_acc_of(tstate), ctx, nbytes);
     if (LIKELY(ptr != NULL)) {
         return ptr;
     }
@@ -2348,8 +2768,9 @@ _PyObject_Calloc(void *ctx, size_t nelem, size_t elsize)
     assert(elsize == 0 || nelem <= (size_t)PY_SSIZE_T_MAX / elsize);
     size_t nbytes = nelem * elsize;
 
-    OMState *state = get_state();
-    void* ptr = pymalloc_alloc(state, ctx, nbytes);
+    PyThreadState *tstate = _PyThreadState_GET();
+    OMState *state = get_state_of(tstate);
+    void* ptr = pymalloc_alloc(state, _PyAlloc_acc_of(tstate), ctx, nbytes);
     if (LIKELY(ptr != NULL)) {
         memset(ptr, 0, nbytes);
         return ptr;
@@ -2550,7 +2971,7 @@ insert_to_freepool(OMState *state, poolp pool)
    Return 1 if it was freed.
    Return 0 if the block was not allocated by pymalloc_alloc(). */
 static inline int
-pymalloc_free(OMState *state, void *Py_UNUSED(ctx), void *p)
+pymalloc_free(OMState *state, _PyAlloc_Acc *acc, void *Py_UNUSED(ctx), void *p)
 {
     assert(p != NULL);
 
@@ -2573,6 +2994,7 @@ pymalloc_free(OMState *state, void *Py_UNUSED(ctx), void *p)
      * list in any case).
      */
     assert(pool->ref.count > 0);            /* else it was empty */
+    _PyAlloc_release_of(acc, (Py_ssize_t)INDEX2SIZE(pool->szidx));
     pymem_block *lastfree = pool->freeblock;
     *(pymem_block **)p = lastfree;
     pool->freeblock = (pymem_block *)p;
@@ -2615,8 +3037,9 @@ _PyObject_Free(void *ctx, void *p)
         return;
     }
 
-    OMState *state = get_state();
-    if (UNLIKELY(!pymalloc_free(state, ctx, p))) {
+    PyThreadState *tstate = _PyThreadState_GET();
+    OMState *state = get_state_of(tstate);
+    if (UNLIKELY(!pymalloc_free(state, _PyAlloc_acc_of(tstate), ctx, p))) {
         /* pymalloc didn't allocate this address */
         PyMem_RawFree(p);
         raw_allocated_blocks--;
@@ -2717,6 +3140,12 @@ _PyObject_Realloc(void *ctx, void *ptr, size_t nbytes)
 /*==========================================================================*/
 /* pymalloc not enabled:  Redirect the entry points to malloc.  These will
  * only be used by extensions that are compiled with pymalloc enabled. */
+
+Py_ssize_t
+_Py_GetGlobalAllocatedBytes(void)
+{
+    return _PyAlloc_total_bytes();
+}
 
 Py_ssize_t
 _PyInterpreterState_GetAllocatedBlocks(PyInterpreterState *Py_UNUSED(interp))

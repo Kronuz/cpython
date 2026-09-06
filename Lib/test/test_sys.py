@@ -2373,5 +2373,97 @@ class TestSysJIT(unittest.TestCase):
         assert_python_ok("-c", script.format(enabled=available), PYTHON_JIT="1")
 
 
+class AllocatedBytesTest(unittest.TestCase):
+    # sys.getallocatedbytes(), sys.gettotalallocatedbytes() and
+    # sys._current_allocated_bytes(), which this distribution adds.
+
+    def test_types_and_ordering(self):
+        live = sys.getallocatedbytes()
+        total = sys.gettotalallocatedbytes()
+        self.assertIsInstance(live, int)
+        self.assertIsInstance(total, int)
+        self.assertGreater(total, 0)
+        # total is alloc_bytes alone; live subtracts freed_bytes from it, and
+        # freed_bytes never goes negative.
+        self.assertGreaterEqual(total, live)
+
+    def test_live_follows_a_large_allocation(self):
+        before = sys.getallocatedbytes()
+        hold = [bytearray(1 << 20) for _ in range(8)]
+        try:
+            self.assertGreater(sys.getallocatedbytes(), before)
+        finally:
+            del hold
+
+    def test_total_only_rises(self):
+        prev = sys.gettotalallocatedbytes()
+        for _ in range(200):
+            bytearray(4096)
+            cur = sys.gettotalallocatedbytes()
+            self.assertGreaterEqual(cur, prev)
+            prev = cur
+
+    @threading_helper.reap_threads
+    def test_total_only_rises_across_thread_exit(self):
+        # A thread folds its counters into the retired accumulator and unlinks
+        # itself under one lock.  Reading that accumulator outside the walk of
+        # the live thread states makes the two halves separate observations, so
+        # a thread retiring in between is counted in neither and the total
+        # dips.  Read it from one thread while others start and exit.
+        import threading
+
+        running = True
+        backwards = []
+
+        def reader():
+            prev = sys.gettotalallocatedbytes()
+            while running:
+                cur = sys.gettotalallocatedbytes()
+                if cur < prev:
+                    backwards.append((prev, cur))
+                    return
+                prev = cur
+
+        def worker():
+            for _ in range(50):
+                bytearray(8192)
+
+        watcher = threading.Thread(target=reader)
+        watcher.start()
+        try:
+            for _ in range(15):
+                batch = [threading.Thread(target=worker) for _ in range(4)]
+                for t in batch:
+                    t.start()
+                for t in batch:
+                    t.join()
+        finally:
+            running = False
+            watcher.join()
+        self.assertEqual(backwards, [], "cumulative total went backwards")
+
+    def test_per_thread_total_only_rises(self):
+        import threading
+
+        # Only this thread's own entry: a thread id can be reused after its
+        # thread exits, and the reused entry legitimately starts from zero.
+        me = threading.get_ident()
+        prev = 0
+        for _ in range(50):
+            bytearray(8192)
+            cur = sys._current_allocated_bytes()[me]
+            self.assertIsInstance(cur, int)
+            self.assertGreaterEqual(cur, prev)
+            prev = cur
+
+    def test_keyed_like_current_frames(self):
+        # Documented to key exactly as sys._current_frames() does, so that the
+        # two snapshots join.
+        import threading
+
+        me = threading.get_ident()
+        self.assertIn(me, sys._current_allocated_bytes())
+        self.assertIn(me, sys._current_frames())
+
 if __name__ == "__main__":
     unittest.main()

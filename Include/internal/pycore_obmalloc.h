@@ -685,6 +685,14 @@ extern Py_ssize_t _Py_GetGlobalAllocatedBlocks(void);
 #define _Py_GetAllocatedBlocks() \
     _Py_GetGlobalAllocatedBlocks()
 extern Py_ssize_t _PyInterpreterState_GetAllocatedBlocks(PyInterpreterState *);
+extern Py_ssize_t _Py_GetGlobalAllocatedBytes(void);
+extern Py_ssize_t _Py_GetTotalAllocatedBytes(void);
+extern PyObject *_Py_GetAllocatedBytesByThread(void);
+/* Declared at file scope: this header is included before
+   pycore_tstate.h, and a struct first named inside a prototype would
+   be a different, function-scoped type. */
+struct _PyThreadStateImpl;
+extern void _PyAlloc_RetireThreadState(struct _PyThreadStateImpl *);
 extern void _PyInterpreterState_FinalizeAllocatedBlocks(PyInterpreterState *);
 extern int _PyMem_init_obmalloc(PyInterpreterState *interp);
 extern bool _PyMem_obmalloc_state_on_heap(PyInterpreterState *interp);
