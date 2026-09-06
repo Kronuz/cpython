@@ -19,6 +19,18 @@ from (stock CPython 3.12.0+, frozen in 2023). It carries none of the work below.
 The per-feature notes (What, Why, ABI, Remove when) come from the rationale each
 patch carries in its own header.
 
+## Digging deeper
+
+- **`AGENTS.md`** is the entry point for working here: the ABI rule that shapes
+  every patch, how to verify a branch, and what not to do. Start here if you are an
+  agent.
+- **`docs/methodology.md`** is the ABI and performance testing discipline, and why
+  it is the way it is.
+- **`docs/`** has a deep dive per feature: `allocated-bytes.md`, `gc-stats.md`,
+  `current-loops.md`, `lazy-imports.md`.
+- **`tools/`** carries `abi-check.py`, `abi-witness.py` and `perf-compare.py`, so
+  you can check a change yourself. They depend on nothing outside this repository.
+
 ## Lazy Imports
 
 Two implementations live here, and the split is worth knowing:
