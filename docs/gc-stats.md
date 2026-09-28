@@ -55,12 +55,15 @@ This line reaches 3.15, which ships gcmon.
 
 ## Upstream parity
 
-Last checked 2026-09-06 against the **3.15 branch tip** `5e19ff32` (ahead of the
-`v3.15.0rc2` tag `435c9e5a`; check the branch, not the tag, because new work lands
-between tags). The gcmon surface (the ring, `get_gc_stats`, the `gc.get_stats()`
-keys, and the free-threaded lock at `8b1dbb17540`) has no follow-ups since the
-backport point. Three later free-threaded GC fixes (`gh-150411`, `gh-156395`,
-`gh-149816`) touch neighboring code but are 3.15/main-only, absent from the 3.12
-through 3.14 branches, and reach a 3.15 build through its base rather than through
-this patch (`gh-156395` touches `_testcapi` and free-threaded GC, not the gcmon
-readers). Next check starts from `5e19ff32`.
+Last checked 2026-09-27 against the **3.15 branch tip** `5985fcbb43d1` (90 commits
+past the previous check `5e19ff32`; the latest tag is still `v3.15.0rc2`). Nothing
+landed on the gcmon surface (the ring, `get_gc_stats`, the `gc.get_stats()` keys,
+the free-threaded lock). Two adjacent remote-debug commits do not apply:
+`gh-157549` (`0c662223`, `remote_debug.h` `get_page_size` from `getpagesize()` to
+`sysconf(_SC_PAGESIZE)`) changes a different region than this patch's
+`TargetConditionals` include near the top of the file, an unrelated portability fix
+with no overlap; and `gh-157660` (`5985fcbb`, fix stale TLBC caches) is in the
+remote stack unwinder (`Modules/_remote_debugging/code_objects.c`), which this
+backport does not carry. The earlier `gh-150411` / `gh-156395` / `gh-149816`
+free-threaded GC fixes remain 3.15/main-only and outside the gcmon readers. Next
+check starts from `5985fcbb43d1`.

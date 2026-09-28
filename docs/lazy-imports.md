@@ -47,12 +47,21 @@ and fails on the installed interpreter.
 
 ## Upstream parity
 
-Last checked 2026-09-06 against the **3.15 branch tip** `5e19ff32` (ahead of the
-`v3.15.0rc2` tag `435c9e5a`). Check the branch, not the tag: new work lands
-between tags, so the tag alone misses in-flight commits. The feature core
-(`Objects/lazyimportobject.c`, `Include/internal/pycore_lazyimportobject.h`) is
-unchanged on the 3.15 branch and main since the backport point `57dface7588a`
-(2026-08-19). Two later 3.15 commits are outstanding, both non-behavioral and
-3.15-only: `GH-155547` (`0ca288a8`, clarify that `sys.lazy_modules` may contain
-extra items, `Doc/library/sys.rst`, 2026-09-04) and `GH-156624` (enable linting
-of the lazy-import tests, 2026-08-30). Next check starts from `5e19ff32`.
+Last checked 2026-09-27 against the **3.15 branch tip** `5985fcbb43d1` (90 commits
+past the previous check `5e19ff32`; the latest tag is still `v3.15.0rc2`, no rc3 or
+final yet). Check the branch, not the tag.
+
+**One core fix needs pulling.** `gh-157757` (`1a2d24e3`, 2026-09-26, make
+`lazy import a.b as c` import the module `a.b`) is a behavioral bug fix in the
+lazy-import core: it corrects dotted `lazy import ... as` to match the eager
+statement, and stops accessing one lazy name from importing the other names'
+submodules. It touches `Objects/lazyimportobject.c`, `Python/ceval.c`, and
+`Python/import.c`, all carried by this backport, so the 3.14 backport (and the 3.15
+scaffold) should pull it.
+
+Outside this patch's file scope, noted but not required: `gh-156924` (`013c4ae5`,
+annotationlib reifies lazy imports in `ForwardRef.evaluate()`, `Lib/annotationlib.py`,
+a consumer of the lazy API rather than the core) and the docs-only `gh-142349`
+(`8bcee873`, document `LazyImportType.resolve()` in `Doc/library/types.rst`). The
+previously-noted `GH-155547` and `GH-156624` remain outstanding and non-behavioral.
+Next check starts from `5985fcbb43d1`.
