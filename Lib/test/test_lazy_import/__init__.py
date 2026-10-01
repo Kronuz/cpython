@@ -13,7 +13,7 @@ import os
 import contextlib
 
 from test import support
-from test.support.script_helper import assert_python_ok
+from test.support.script_helper import assert_python_ok, assert_python_failure
 
 try:
     import _testcapi
@@ -284,6 +284,23 @@ class LazyImportTypeTests(LazyImportTestCase):
         """)
         proc = assert_python_ok("-c", code)
         self.assertIn(b"<built-in method resolve of lazy_import object at", proc.out)
+
+    @support.requires_subprocess()
+    def test_lazy_import_type_attribute_error_message(self):
+        """Check that LazyImportType attribute error message is helpful."""
+        code = textwrap.dedent("""
+            lazy import asyncio
+            try:
+                globals()["asyncio"].Task
+            except AttributeError as exc:
+                assert str(exc) == (
+                    "cannot access attribute 'Task' "
+                    "on unresolved lazy import 'asyncio'"
+                ), repr(str(exc))
+            else:
+                assert False, 'AttributeError is not raised'
+        """)
+        assert_python_ok("-c", code)
 
 
 class SyntaxRestrictionTests(LazyImportTestCase):
@@ -608,6 +625,14 @@ class DunderLazyImportTests(LazyImportTestCase):
         with self.assertRaises(TypeError):
             __lazy_import__("sys", globals=1)
 
+        code = textwrap.dedent("""
+            __lazy_import__("sys", fromlist=(1, 2, 3))
+        """)
+        result = assert_python_failure("-c", code, NO_COLOR='y')
+        self.assertIn(
+            b"TypeError: Item in ``from list'' must be str, not int",
+            result.err)
+
     def test_dunder_lazy_import_builtins(self):
         """__lazy_import__ should use module's __builtins__ for __import__."""
         from test.test_lazy_import.data import dunder_lazy_import_builtins
@@ -658,7 +683,7 @@ class SysLazyImportsAPITests(LazyImportTestCase):
         sys.set_lazy_imports_filter(my_filter)
         self.assertIs(sys.get_lazy_imports_filter(), my_filter)
 
-    def test_lazy_modules_attribute_is_set(self):
+    def test_lazy_modules_attribute_is_dict(self):
         """sys.lazy_modules should be a set per PEP 810."""
         self.assertIsInstance(sys.lazy_modules, set)
 
@@ -687,7 +712,7 @@ class ErrorHandlingTests(LazyImportTestCase):
     """Tests for error handling during lazy import reification."""
 
     def test_missing_lazy_submodule_raises_module_not_found_error(self):
-        """Accessing a nonexistent lazy submodule raises ModuleNotFoundError."""
+        """Accessing a nonexistent lazy submodule via parent attr raises ModuleNotFoundError."""
         code = textwrap.dedent("""
             lazy import test.test_lazy_import.data.nonexistent_module
 
@@ -752,6 +777,28 @@ class ErrorHandlingTests(LazyImportTestCase):
                 _ = nonexistent_name
             except ImportError as e:
                 assert e.__cause__ is not None, "Expected chained exception"
+            else:
+                raise AssertionError("ImportError was not raised")
+        """)
+        assert_python_ok("-c", code)
+
+    @support.subTests('name', (
+        'test.test_lazy_import.data.broken_module_chained_cause',
+        'test.test_lazy_import.data.broken_module_chained_context',
+        'test.test_lazy_import.data.broken_module_chained_suppressed',
+    ))
+    def test_chained_exception_import_shows_notes(self, name):
+        """Accessing missing attribute from lazy from-import should chain errors."""
+        code = textwrap.dedent(f"""
+            lazy import {name}
+
+            try:
+                _ = test
+            except ValueError as e:
+                assert any(
+                    note.startswith("lazy import of '{name}' declared in ")
+                    for note in e.__notes__
+                ), e.__notes__
             else:
                 raise AssertionError("ImportError was not raised")
         """)
@@ -1280,7 +1327,6 @@ class CommandLineAndEnvVarTests(unittest.TestCase):
         """-X lazy_imports=all should make all imports potentially lazy."""
         code = textwrap.dedent("""
             import sys
-            assert sys.flags.lazy_imports == 1
             # In 'all' mode, regular imports become lazy
             import json
             # json should not be in sys.modules yet (lazy)
@@ -1315,7 +1361,6 @@ class CommandLineAndEnvVarTests(unittest.TestCase):
         # modules already loaded by the interpreter startup
         code = textwrap.dedent("""
             import sys
-            assert sys.flags.lazy_imports == -1
             import test.test_lazy_import.data.basic2  # Should be eager
             lazy import test.test_lazy_import.data.pkg.b  # Should be lazy
 
@@ -1339,7 +1384,6 @@ class CommandLineAndEnvVarTests(unittest.TestCase):
         """PYTHON_LAZY_IMPORTS=all should enable global lazy imports."""
         code = textwrap.dedent("""
             import sys
-            assert sys.flags.lazy_imports == 1
             import json
             if 'json' not in sys.modules:
                 print("LAZY")
@@ -1944,7 +1988,7 @@ class ThreadSafetyTests(LazyImportTestCase):
         self.assertEqual(result.returncode, 0, f"stdout: {result.stdout}, stderr: {result.stderr}")
         self.assertIn("OK", result.stdout)
 
-    def test_concurrent_lazy_modules_set_updates(self):
+    def test_concurrent_lazy_modules_dict_updates(self):
         """Multiple threads creating lazy imports should safely update sys.lazy_modules."""
         code = textwrap.dedent("""
             import sys

@@ -4057,6 +4057,25 @@ error:
             goto ok;
         }
 
+        // If the exception already carries a cause/context (a chained error,
+        // including `raise ... from None`), attach a note recording where the
+        // lazy import was declared rather than replacing the cause. Matches
+        // upstream GH-158282's lazy_import_add_exception_cause.
+        PyBaseExceptionObject *base_exc = (PyBaseExceptionObject *)exc;
+        if (base_exc->cause != NULL || base_exc->context != NULL ||
+            base_exc->suppress_context) {
+            PyObject *note = PyUnicode_FromFormat(
+                "lazy import of '%U' declared in %s at %s:%d",
+                import_name, funcname_str, filename_str, lineno);
+            if (note != NULL) {
+                (void)_PyException_AddNote(exc, note);
+                Py_DECREF(note);
+            }
+            Py_DECREF(import_name);
+            _PyErr_SetRaisedException(tstate, exc);
+            goto ok;
+        }
+
         // Create a cause exception showing where the lazy import was declared.
         PyObject *msg = PyUnicode_FromFormat(
             "lazy import of '%U' raised an exception during resolution",
@@ -4642,6 +4661,22 @@ _PyImport_LazyImportModuleLevelObject(PyThreadState *tstate,
     }
     else {
         Py_XINCREF(fromlist);
+    }
+    // Validate fromlist items are strings before creating the lazy import,
+    // matching upstream GH-158282 and eager __import__. Without this a non-str
+    // item reaches code that assumes str and crashes a debug build.
+    if (fromlist != NULL && PyTuple_Check(fromlist)) {
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(fromlist); i++) {
+            PyObject *item = PyTuple_GET_ITEM(fromlist, i);
+            if (!PyUnicode_Check(item)) {
+                _PyErr_Format(tstate, PyExc_TypeError,
+                              "Item in ``from list'' must be str, not %.200s",
+                              Py_TYPE(item)->tp_name);
+                Py_XDECREF(fromlist);
+                Py_DECREF(abs_name);
+                return NULL;
+            }
+        }
     }
     PyObject *res = _PyLazyImport_New(frame, builtins, abs_name, fromlist);
     if (res == NULL) {
