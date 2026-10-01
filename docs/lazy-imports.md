@@ -73,3 +73,5 @@ Porting it is a decision, not a drop-in, given the scope.
 Still outside the patch's file scope (non-blocking): `gh-156924` (annotationlib
 consumer), docs-only `gh-142349`/`8bcee873`, and the earlier non-behavioral
 `GH-155547` / `GH-156624`. Next check starts from `021f634ed878`.
+
+**Backported since (2026-10-01):** the 3.14 patch now carries `gh-157757` and two user-visible `GH-158282` behaviors (chained-exception notes and `__lazy_import__` fromlist validation), ported against 3.14 APIs. The 3.15-tip `test_lazy_import` suite (021f634) passes in full (133 tests) with ABI IDENTICAL. The `GH-158282` internal resolver refactor is not adopted (3.15-only dict/eval infrastructure). cleanpython314 PR #47; fork branch `3.14-lazy-imports`.
