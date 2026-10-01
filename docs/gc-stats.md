@@ -55,15 +55,11 @@ This line reaches 3.15, which ships gcmon.
 
 ## Upstream parity
 
-Last checked 2026-09-27 against the **3.15 branch tip** `5985fcbb43d1` (90 commits
-past the previous check `5e19ff32`; the latest tag is still `v3.15.0rc2`). Nothing
-landed on the gcmon surface (the ring, `get_gc_stats`, the `gc.get_stats()` keys,
-the free-threaded lock). Two adjacent remote-debug commits do not apply:
-`gh-157549` (`0c662223`, `remote_debug.h` `get_page_size` from `getpagesize()` to
-`sysconf(_SC_PAGESIZE)`) changes a different region than this patch's
-`TargetConditionals` include near the top of the file, an unrelated portability fix
-with no overlap; and `gh-157660` (`5985fcbb`, fix stale TLBC caches) is in the
-remote stack unwinder (`Modules/_remote_debugging/code_objects.c`), which this
-backport does not carry. The earlier `gh-150411` / `gh-156395` / `gh-149816`
-free-threaded GC fixes remain 3.15/main-only and outside the gcmon readers. Next
-check starts from `5985fcbb43d1`.
+Last checked 2026-10-01 (3.15 release day) against the **3.15 branch tip**
+`021f634ed878` (42 commits past the previous check `5985fcbb43d1`; no `v3.15.0`
+final tag pushed yet, latest is `v3.15.0rc2`). The gcmon surface (the ring,
+`get_gc_stats`, the `gc.get_stats()` keys, the free-threaded lock) is unchanged:
+nothing in the 42 new commits touches it. The earlier `gh-150411` / `gh-156395` /
+`gh-149816` free-threaded GC fixes and the `remote_debug.h` / remote-unwinder
+changes (`gh-157549`, `gh-157660`) remain outside the gcmon readers. Next check
+starts from `021f634ed878`.

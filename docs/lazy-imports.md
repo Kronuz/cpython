@@ -47,21 +47,29 @@ and fails on the installed interpreter.
 
 ## Upstream parity
 
-Last checked 2026-09-27 against the **3.15 branch tip** `5985fcbb43d1` (90 commits
-past the previous check `5e19ff32`; the latest tag is still `v3.15.0rc2`, no rc3 or
-final yet). Check the branch, not the tag.
+Last checked 2026-10-01 (3.15 release day) against the **3.15 branch tip**
+`021f634ed878` (42 commits past the previous check `5985fcbb43d1`). No `v3.15.0`
+final tag is pushed yet; the latest tag is still `v3.15.0rc2`.
 
-**One core fix needs pulling.** `gh-157757` (`1a2d24e3`, 2026-09-26, make
-`lazy import a.b as c` import the module `a.b`) is a behavioral bug fix in the
-lazy-import core: it corrects dotted `lazy import ... as` to match the eager
-statement, and stops accessing one lazy name from importing the other names'
-submodules. It touches `Objects/lazyimportobject.c`, `Python/ceval.c`, and
-`Python/import.c`, all carried by this backport, so the 3.14 backport (and the 3.15
-scaffold) should pull it.
+**The lazy-import core was substantially refactored on release day, and this
+backport predates it.** `gh-142349` / `GH-158282` (`021f634`, 2026-10-01,
+"Simplify lazy import resolution", co-authored by Petr Viktorin and Hugo van
+Kemenade) lands a shared lazy-import resolver: it rewrites `Objects/lazyimportobject.c`
+(+431/-32) and `Python/import.c` (+105/-379), changes the `PyLazyImportObject`
+struct layout, changes the `_PyLazyImport_New` signature, adds `_PyLazyImport_Reify`
+and `_PyLazyImport_IsResolving`, and regenerates the opcode metadata, bytecodes,
+and generated-case files, also touching `Objects/dictobject.c`,
+`Objects/moduleobject.c`, `pycore_interp_structs.h`, and `pycore_tstate.h`. It also
+adds chained-exception-note behavior for a broken lazy import.
 
-Outside this patch's file scope, noted but not required: `gh-156924` (`013c4ae5`,
-annotationlib reifies lazy imports in `ForwardRef.evaluate()`, `Lib/annotationlib.py`,
-a consumer of the lazy API rather than the core) and the docs-only `gh-142349`
-(`8bcee873`, document `LazyImportType.resolve()` in `Doc/library/types.rst`). The
-previously-noted `GH-155547` and `GH-156624` remain outstanding and non-behavioral.
-Next check starts from `5985fcbb43d1`.
+This is **not a clean cherry-pick**: it is a structural rewrite that changes layout
+and opcode metadata, so it needs a deliberate re-sync of the 3.14 backport (and the
+3.15 scaffold) to the current lazy core, verified with `abi-check.py` because it
+moves internal struct members. It **subsumes** the `gh-157757` item flagged last
+check: `gh-157757` (`1a2d24e`) is already in the branch below this refactor, which
+rewrites the same three core files, so re-syncing to the current core carries both.
+Porting it is a decision, not a drop-in, given the scope.
+
+Still outside the patch's file scope (non-blocking): `gh-156924` (annotationlib
+consumer), docs-only `gh-142349`/`8bcee873`, and the earlier non-behavioral
+`GH-155547` / `GH-156624`. Next check starts from `021f634ed878`.
