@@ -19,6 +19,7 @@ typedef struct {
     PyObject *filter;
     PyObject *modules;
     PyObject *pending_submodules;
+    int has_lazy_submodules;
     PyObject *builtins_import_name;
     PyObject *module_list_name;
     PyObject *find_and_load_submodule_name;
@@ -62,7 +63,9 @@ PyAPI_FUNC(PyObject *) _PyImport_LoadLazyImportTstate(
 // new reference, NULL without an exception if absent, or NULL on error.
 // Set recheck_dict if a concurrent lookup may have already bound the child.
 extern PyObject * _PyImport_TryLoadLazySubmodule(
-    PyObject *module, PyObject *attr_name, int *recheck_dict);
+    PyObject *module, PyObject *attr_name, int suppress, int *recheck_dict);
+extern int _PyImport_ClearLazySubmodule(
+    PyThreadState *tstate, PyObject *name, int bind);
 extern PyObject * _PyImport_LazyImportModuleLevelObject(
     PyThreadState *tstate, PyObject *name, PyObject *builtins,
     PyObject *globals, PyObject *locals, PyObject *fromlist, int level);
