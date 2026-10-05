@@ -11,7 +11,6 @@
 #include "pycore_moduleobject.h"
 #include "pycore_pyatomic_ft_wrappers.h"
 #include "pycore_pyerrors.h"
-#include "pycore_pystate.h"
 #include "pycore_traceback.h"
 #include "pycore_tstate.h"
 
@@ -38,35 +37,11 @@ static PyObject *lazy_import_name(PyLazyImportObject *m);
 static PyObject *
 lazy_imports_resolving_set(PyThreadState *tstate, int create)
 {
-#ifdef Py_GIL_DISABLED
     _PyThreadStateImpl *ts = (_PyThreadStateImpl *)tstate;
     if (ts->lazy_imports == NULL && create) {
         ts->lazy_imports = PySet_New(NULL);
     }
     return Py_XNewRef(ts->lazy_imports);
-#else
-    PyObject *dict = create ? _PyThreadState_GetDict(tstate) : tstate->dict;
-    if (dict == NULL) {
-        if (create) {
-            PyErr_NoMemory();
-        }
-        return NULL;
-    }
-    PyObject *resolving = NULL;
-    int rc = PyDict_GetItemRef(dict, (PyObject *)&PyLazyImport_Type, &resolving);
-    if (rc != 0 || !create) {
-        return resolving;
-    }
-    resolving = PySet_New(NULL);
-    if (resolving == NULL) {
-        return NULL;
-    }
-    if (PyDict_SetItem(dict, (PyObject *)&PyLazyImport_Type, resolving) < 0) {
-        Py_DECREF(resolving);
-        return NULL;
-    }
-    return resolving;
-#endif
 }
 
 PyObject *

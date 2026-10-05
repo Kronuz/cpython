@@ -44,7 +44,14 @@ typedef struct _PyThreadStateImpl {
        or subclasses of it used in `asyncio.all_tasks`.
     */
     struct llist_node asyncio_tasks_head;
+#ifdef Py_GIL_DISABLED
     struct _qsbr_thread_state *qsbr;  // only used by free-threaded build
+#else
+    union {
+        struct _qsbr_thread_state *qsbr;
+        PyObject *lazy_imports;
+    };
+#endif
     struct llist_node mem_free_queue; // delayed free queue
 
 #ifdef Py_GIL_DISABLED
@@ -84,7 +91,6 @@ typedef struct _PyThreadStateImpl {
     // gh-144438: Add padding to ensure that the fields above don't share a
     // cache line with other allocations.
     // Lazy-import placeholders in progress on this thread (GH-158282 backport).
-    // Carved from the reserved tail padding so sizeof stays byte-identical.
     PyObject *lazy_imports;
     char __padding[56];
 #endif

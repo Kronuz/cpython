@@ -141,6 +141,7 @@ extern Py_ssize_t _PyDictKeys_StringLookup(PyDictKeysObject* dictkeys, PyObject 
  */
 PyAPI_FUNC(Py_ssize_t) _PyDictKeys_StringLookupAndVersion(PyDictKeysObject* dictkeys, PyObject *key, uint32_t *version);
 PyAPI_FUNC(Py_ssize_t) _PyDictKeys_StringLookupSplit(PyDictKeysObject* dictkeys, PyObject *key);
+PyAPI_FUNC(PyObject *) _PyDict_LoadGlobal(PyDictObject *, PyDictObject *, PyObject *);
 // Return the borrowed source dictionary, or NULL if absent or on error.
 PyAPI_FUNC(PyObject *) _PyDict_LoadGlobalStackRef(PyDictObject *, PyDictObject *, PyObject *, _PyStackRef *);
 

@@ -2588,6 +2588,16 @@ _PyDict_GetItemStringWithError(PyObject *v, const char *key)
 }
 
 PyObject *
+_PyDict_LoadGlobal(PyDictObject *globals, PyDictObject *builtins, PyObject *key)
+{
+    _PyStackRef res;
+    if (_PyDict_LoadGlobalStackRef(globals, builtins, key, &res) == NULL) {
+        return NULL;
+    }
+    return PyStackRef_AsPyObjectSteal(res);
+}
+
+PyObject *
 _PyDict_LoadGlobalStackRef(PyDictObject *globals, PyDictObject *builtins, PyObject *key, _PyStackRef *res)
 {
     Py_ssize_t ix;
