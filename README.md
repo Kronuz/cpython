@@ -68,21 +68,31 @@ forward to 3.12.11. The large tree diff between them is entirely the upstream
 
 ### PEP 810 backport (clean single-feature)
 
-[`3.14-lazy-imports`](https://github.com/Kronuz/cpython/tree/3.14-lazy-imports), base v3.14.7.
+[`3.14-lazy-imports`](https://github.com/Kronuz/cpython/tree/3.14-lazy-imports), base v3.14.8.
 
 - **What.** The full upstream implementation: the `lazy import` grammar and AST,
   the `LAZY_IMPORT_NAME` and `LAZY_IMPORT_FROM` opcodes and their
   specializations, lazy dict values in `dictobject.c` and `moduleobject.c`,
-  `sys.set_lazy_imports()` and `-X lazy_imports`, plus the docs and tests.
+  `sys.set_lazy_imports()`, `sys.lazy_modules`, `-X lazy_imports`,
+  `ForwardRef.evaluate()` reification, plus the docs and tests.
 - **Why.** Import time dominates startup for larger Python services, and lazy
   imports cut it without every service hand-rolling module-level deferral.
-- **Provenance.** A faithful backport of upstream's PEP 810 (`gh-142349`), first
-  shipped in 3.15. The feature landed in `GH-142351`, and this carries its
-  follow-ups too (`GH-150126`, `GH-144856`, `GH-154688`).
-- **ABI.** No structure changes; sizes and offsets match a stock build. The lazy
-  state is heap-allocated behind the existing unused
+- **Provenance.** A faithful backport of upstream's PEP 810 (`gh-142349`) and its
+  3.15 resolver, tracking the 3.15 branch at `d625ecbb8d`. The feature is
+  `GH-142351` and the resolver simplification `GH-158282`; this carries the
+  follow-ups `GH-157714` (`sys.lazy_modules`), `GH-158521` (sibling submodules),
+  `GH-149739` (tests), `GH-156924` (`ForwardRef.evaluate`), and the doc fixes
+  `GH-155547` / `GH-156936`. The resolver and tests match the 3.15 tip except for
+  the ABI adaptations below.
+- **ABI.** No member offset moves on either the default or free-threaded build.
+  The lazy-import state is heap-allocated behind the existing unused
   `PyInterpreterState._malloced`, and `PyConfig.lazy_imports` is omitted, so
-  `-X lazy_imports` and `PYTHON_LAZY_IMPORTS` still work.
+  `-X lazy_imports` and `PYTHON_LAZY_IMPORTS` still work. The per-thread resolving
+  set is a new `_PyThreadStateImpl.lazy_imports` field: on free-threaded builds it
+  is carved from the gh-144438 cache-line padding (`[64]` to `[56]`), leaving the
+  size unchanged; on the default build it is appended at the struct tail
+  (+8 bytes, no offset moves). The exported `_PyDict_LoadGlobal` symbol is kept as
+  a raw compatibility shim so prebuilt 3.14 extensions that link it keep working.
 - **Remove when.** This line reaches 3.15, which ships PEP 810.
 
 ## Allocation accounting (sys)
