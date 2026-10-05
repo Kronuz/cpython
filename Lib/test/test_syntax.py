@@ -3406,7 +3406,6 @@ while 1:
         ]:
             self._check_error(f"x = {lhs_stmt} if 1 else {rhs_stmt}", msg)
 
-<<<<<<< HEAD
     def test_diamond_operator(self):
         self._check_error(
             "1<>2",
@@ -3431,8 +3430,6 @@ while 1:
             end_offset=5,
         )
 
-||||||| parent of fa7d6cd94f (Backport PEP 810 (Explicit Lazy Imports) to 3.14)
-=======
 
 class LazyImportRestrictionTestCase(SyntaxErrorTestCase):
     """Test syntax restrictions for lazy imports."""
@@ -3571,7 +3568,6 @@ from ...mod lazy import join
         compile("lazy from datetime import datetime as dt", "<test>", "exec")
 
 
->>>>>>> fa7d6cd94f (Backport PEP 810 (Explicit Lazy Imports) to 3.14)
 def load_tests(loader, tests, pattern):
     tests.addTest(doctest.DocTestSuite())
     return tests
