@@ -83,7 +83,10 @@ typedef struct _PyThreadStateImpl {
 #ifdef Py_GIL_DISABLED
     // gh-144438: Add padding to ensure that the fields above don't share a
     // cache line with other allocations.
-    char __padding[64];
+    // Lazy-import placeholders in progress on this thread (GH-158282 backport).
+    // Carved from the reserved tail padding so sizeof stays byte-identical.
+    PyObject *lazy_imports;
+    char __padding[56];
 #endif
 } _PyThreadStateImpl;
 

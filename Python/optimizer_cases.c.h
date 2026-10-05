@@ -948,7 +948,12 @@
             break;
         }
 
-        /* _LOAD_FROM_DICT_OR_GLOBALS is not a viable micro-op for tier 2 */
+        case _LOAD_FROM_DICT_OR_GLOBALS: {
+            JitOptSymbol *v;
+            v = sym_new_not_null(ctx);
+            stack_pointer[-1] = v;
+            break;
+        }
 
         case _LOAD_NAME: {
             JitOptSymbol *v;

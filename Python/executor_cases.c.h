@@ -2346,7 +2346,49 @@
             break;
         }
 
-        /* _LOAD_FROM_DICT_OR_GLOBALS is not a viable micro-op for tier 2 because it has both popping and not-popping errors */
+        case _LOAD_FROM_DICT_OR_GLOBALS: {
+            _PyStackRef mod_or_class_dict;
+            _PyStackRef v;
+            oparg = CURRENT_OPARG();
+            mod_or_class_dict = stack_pointer[-1];
+            PyObject *name = GETITEM(FRAME_CO_NAMES, oparg);
+            PyObject *namespace = PyStackRef_AsPyObjectBorrow(mod_or_class_dict);
+            int err;
+            _PyFrame_SetStackPointer(frame, stack_pointer);
+            PyObject *v_o = _PyMapping_GetOptionalItem2(namespace, name, &err);
+            stack_pointer = _PyFrame_GetStackPointer(frame);
+            if (v_o != NULL && PyLazyImport_CheckExact(v_o)) {
+                _PyFrame_SetStackPointer(frame, stack_pointer);
+                Py_SETREF(v_o, _PyLazyImport_Reify(tstate, v_o, name, namespace));
+                stack_pointer = _PyFrame_GetStackPointer(frame);
+                if (v_o == NULL) {
+                    err = -1;
+                }
+            }
+            stack_pointer += -1;
+            assert(WITHIN_STACK_BOUNDS());
+            _PyFrame_SetStackPointer(frame, stack_pointer);
+            PyStackRef_CLOSE(mod_or_class_dict);
+            stack_pointer = _PyFrame_GetStackPointer(frame);
+            if (err < 0) {
+                JUMP_TO_ERROR();
+            }
+            if (v_o == NULL) {
+                _PyFrame_SetStackPointer(frame, stack_pointer);
+                _PyEval_LoadGlobalStackRef(GLOBALS(), BUILTINS(), name, &v);
+                stack_pointer = _PyFrame_GetStackPointer(frame);
+                if (PyStackRef_IsNull(v)) {
+                    JUMP_TO_ERROR();
+                }
+            }
+            else {
+                v = PyStackRef_FromPyObjectSteal(v_o);
+            }
+            stack_pointer[0] = v;
+            stack_pointer += 1;
+            assert(WITHIN_STACK_BOUNDS());
+            break;
+        }
 
         case _LOAD_NAME: {
             _PyStackRef v;
@@ -2357,30 +2399,6 @@
             stack_pointer = _PyFrame_GetStackPointer(frame);
             if (v_o == NULL) {
                 JUMP_TO_ERROR();
-            }
-            if (PyLazyImport_CheckExact(v_o)) {
-                _PyFrame_SetStackPointer(frame, stack_pointer);
-                PyObject *l_v = _PyImport_LoadLazyImportTstate(tstate, v_o);
-                stack_pointer = _PyFrame_GetStackPointer(frame);
-                if (l_v == NULL) {
-                    _PyFrame_SetStackPointer(frame, stack_pointer);
-                    Py_DECREF(v_o);
-                    stack_pointer = _PyFrame_GetStackPointer(frame);
-                    JUMP_TO_ERROR();
-                }
-                _PyFrame_SetStackPointer(frame, stack_pointer);
-                int err = PyDict_SetItem(GLOBALS(), name, l_v);
-                stack_pointer = _PyFrame_GetStackPointer(frame);
-                if (err < 0) {
-                    _PyFrame_SetStackPointer(frame, stack_pointer);
-                    Py_DECREF(v_o);
-                    Py_DECREF(l_v);
-                    stack_pointer = _PyFrame_GetStackPointer(frame);
-                    JUMP_TO_ERROR();
-                }
-                _PyFrame_SetStackPointer(frame, stack_pointer);
-                Py_SETREF(v_o, l_v);
-                stack_pointer = _PyFrame_GetStackPointer(frame);
             }
             v = PyStackRef_FromPyObjectSteal(v_o);
             stack_pointer[0] = v;
@@ -2583,6 +2601,15 @@
                     _PyFrame_SetStackPointer(frame, stack_pointer);
                     _PyEval_FormatExcUnbound(tstate, _PyFrame_GetCode(frame), oparg);
                     stack_pointer = _PyFrame_GetStackPointer(frame);
+                    JUMP_TO_ERROR();
+                }
+            }
+            else if (PyLazyImport_CheckExact(value_o)) {
+                _PyFrame_SetStackPointer(frame, stack_pointer);
+                Py_SETREF(value_o, _PyLazyImport_Reify(
+                              tstate, value_o, name, class_dict));
+                stack_pointer = _PyFrame_GetStackPointer(frame);
+                if (value_o == NULL) {
                     JUMP_TO_ERROR();
                 }
             }
