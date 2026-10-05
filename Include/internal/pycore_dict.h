@@ -13,6 +13,11 @@ extern "C" {
 #include "pycore_stackref.h"             // _PyStackRef
 #include "pycore_stats.h"
 
+// 3.14 has no frozendict, so these alias the plain dict checks for the
+// lazy-import resolver.
+#define PyAnyDict_CheckExact(ob) PyDict_CheckExact(ob)
+#define PyAnyDict_Check(ob) PyDict_Check(ob)
+
 // Unsafe flavor of PyDict_GetItemWithError(): no error checking
 extern PyObject* _PyDict_GetItemWithError(PyObject *dp, PyObject *key);
 

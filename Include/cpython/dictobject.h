@@ -32,9 +32,6 @@ typedef struct {
     PyDictValues *ma_values;
 } PyDictObject;
 
-#define PyAnyDict_CheckExact(ob) PyDict_CheckExact(ob)
-#define PyAnyDict_Check(ob) PyDict_Check(ob)
-
 PyAPI_FUNC(PyObject *) _PyDict_GetItem_KnownHash(PyObject *mp, PyObject *key,
                                                  Py_hash_t hash);
 // PyDict_GetItemStringRef() can be used instead
