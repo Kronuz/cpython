@@ -399,19 +399,6 @@ _PyImport_DiscardLazyModule(PyInterpreterState *interp, PyObject *name)
     return PySet_Discard(LAZY_MODULES(interp), name);
 }
 
-static PyObject *
-get_importtime_name(PyObject *name)
-{
-    PyObject *exc = PyErr_GetRaisedException();
-    PyObject *encoded = PyUnicode_AsEncodedString(name, "utf-8",
-                                                  "backslashreplace");
-    if (encoded == NULL) {
-        PyErr_Clear();
-    }
-    PyErr_SetRaisedException(exc);
-    return encoded;
-}
-
 // Return whether the cached module was still initializing.
 static int
 import_ensure_initialized(PyInterpreterState *interp, PyObject *mod, PyObject *name)
