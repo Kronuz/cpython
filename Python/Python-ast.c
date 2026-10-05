@@ -4,7 +4,6 @@
 #include "pycore_ast.h"
 #include "pycore_ast_state.h"     // struct ast_state
 #include "pycore_ceval.h"         // _Py_EnterRecursiveCall()
-#include "pycore_import.h"        // _PyImport_GetLazyState()
 #include "pycore_lock.h"          // _PyOnceFlag
 #include "pycore_modsupport.h"    // _PyArg_NoPositional()
 #include "pycore_pystate.h"       // _PyInterpreterState_GET()
@@ -28,13 +27,6 @@ get_ast_state(void)
         return NULL;
     }
     return state;
-}
-
-static PyObject *
-get_is_lazy_identifier(void)
-{
-    PyInterpreterState *interp = _PyInterpreterState_GET();
-    return _PyImport_GetLazyState(interp)->ast_is_lazy_name;
 }
 
 void _PyAST_Fini(PyInterpreterState *interp)
@@ -230,6 +222,7 @@ void _PyAST_Fini(PyInterpreterState *interp)
     Py_CLEAR(state->id);
     Py_CLEAR(state->ifs);
     Py_CLEAR(state->is_async);
+    Py_CLEAR(state->is_lazy);
     Py_CLEAR(state->items);
     Py_CLEAR(state->iter);
     Py_CLEAR(state->key);
@@ -335,6 +328,7 @@ static int init_identifiers(struct ast_state *state)
     if ((state->id = PyUnicode_InternFromString("id")) == NULL) return -1;
     if ((state->ifs = PyUnicode_InternFromString("ifs")) == NULL) return -1;
     if ((state->is_async = PyUnicode_InternFromString("is_async")) == NULL) return -1;
+    if ((state->is_lazy = PyUnicode_InternFromString("is_lazy")) == NULL) return -1;
     if ((state->items = PyUnicode_InternFromString("items")) == NULL) return -1;
     if ((state->iter = PyUnicode_InternFromString("iter")) == NULL) return -1;
     if ((state->key = PyUnicode_InternFromString("key")) == NULL) return -1;
@@ -6392,8 +6386,7 @@ init_types(void *arg)
                                    Import_fields, 2,
         "Import(alias* names, int? is_lazy)");
     if (!state->Import_type) return -1;
-    if (PyObject_SetAttr(state->Import_type, get_is_lazy_identifier(), Py_None)
-        == -1)
+    if (PyObject_SetAttr(state->Import_type, state->is_lazy, Py_None) == -1)
         return -1;
     state->ImportFrom_type = make_type(state, "ImportFrom", state->stmt_type,
                                        ImportFrom_fields, 4,
@@ -6403,8 +6396,7 @@ init_types(void *arg)
         return -1;
     if (PyObject_SetAttr(state->ImportFrom_type, state->level, Py_None) == -1)
         return -1;
-    if (PyObject_SetAttr(state->ImportFrom_type, get_is_lazy_identifier(),
-        Py_None) == -1)
+    if (PyObject_SetAttr(state->ImportFrom_type, state->is_lazy, Py_None) == -1)
         return -1;
     state->Global_type = make_type(state, "Global", state->stmt_type,
                                    Global_fields, 1,
@@ -9516,7 +9508,7 @@ ast2obj_stmt(struct ast_state *state, void* _o)
         Py_DECREF(value);
         value = ast2obj_int(state, o->v.Import.is_lazy);
         if (!value) goto failed;
-        if (PyObject_SetAttr(result, get_is_lazy_identifier(), value) == -1)
+        if (PyObject_SetAttr(result, state->is_lazy, value) == -1)
             goto failed;
         Py_DECREF(value);
         break;
@@ -9542,7 +9534,7 @@ ast2obj_stmt(struct ast_state *state, void* _o)
         Py_DECREF(value);
         value = ast2obj_int(state, o->v.ImportFrom.is_lazy);
         if (!value) goto failed;
-        if (PyObject_SetAttr(result, get_is_lazy_identifier(), value) == -1)
+        if (PyObject_SetAttr(result, state->is_lazy, value) == -1)
             goto failed;
         Py_DECREF(value);
         break;
@@ -13580,7 +13572,7 @@ obj2ast_stmt(struct ast_state *state, PyObject* obj, stmt_ty* out, PyArena*
             }
             Py_CLEAR(tmp);
         }
-        if (PyObject_GetOptionalAttr(obj, get_is_lazy_identifier(), &tmp) < 0) {
+        if (PyObject_GetOptionalAttr(obj, state->is_lazy, &tmp) < 0) {
             return -1;
         }
         if (tmp == NULL || tmp == Py_None) {
@@ -13685,7 +13677,7 @@ obj2ast_stmt(struct ast_state *state, PyObject* obj, stmt_ty* out, PyArena*
             if (res != 0) goto failed;
             Py_CLEAR(tmp);
         }
-        if (PyObject_GetOptionalAttr(obj, get_is_lazy_identifier(), &tmp) < 0) {
+        if (PyObject_GetOptionalAttr(obj, state->is_lazy, &tmp) < 0) {
             return -1;
         }
         if (tmp == NULL || tmp == Py_None) {
