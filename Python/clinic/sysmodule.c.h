@@ -2000,4 +2000,4 @@ exit:
 #ifndef SYS_GETANDROIDAPILEVEL_METHODDEF
     #define SYS_GETANDROIDAPILEVEL_METHODDEF
 #endif /* !defined(SYS_GETANDROIDAPILEVEL_METHODDEF) */
-/*[clinic end generated code: output=407915aef6734c56 input=a9049054013a1b77]*/
+/*[clinic end generated code: output=15598fe7d72c644d input=a9049054013a1b77]*/
