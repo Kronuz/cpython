@@ -2102,6 +2102,76 @@ done:
 }
 
 
+/* The implementation of sys._current_loops().  This is intended to be
+   called with the GIL held, as it will be when called via
+   sys._current_loops().  It's possible it would work fine even without
+   the GIL held, but haven't thought enough about that.
+*/
+PyObject *
+_PyThread_CurrentLoops(void)
+{
+    _PyRuntimeState *runtime = &_PyRuntime;
+    PyThreadState *tstate = current_fast_get(runtime);
+
+    _Py_EnsureTstateNotNULL(tstate);
+
+    if (_PySys_Audit(tstate, "sys._current_loops", NULL) < 0) {
+        return NULL;
+    }
+
+    PyObject *result = PyDict_New();
+    if (result == NULL) {
+        return NULL;
+    }
+
+    /* for i in all interpreters:
+     *     for t in all of i's thread states:
+     *          if t has a __asyncio_running_event_loop__ entry,
+     *              map t's id to that loop
+     * Because these lists can mutate even when the GIL is held, we
+     * need to grab head_mutex for the duration.
+     */
+    HEAD_LOCK(runtime);
+    PyInterpreterState *i;
+    for (i = runtime->interpreters.head; i != NULL; i = i->next) {
+        PyThreadState *t;
+        for (t = i->threads.head; t != NULL; t = t->next) {
+            PyObject *ts_dict = _PyThreadState_GetDict(t);  // borrowed
+            if (ts_dict == NULL) {
+                continue;
+            }
+            /* Note: This relies on asyncio storing the running loop under
+               __asyncio_running_event_loop__ in the thread state dict.
+               CPython 3.13 removed this entry, so this helper will need to be
+               updated when we upgrade the runtime to 3.13+. */
+            PyObject *loop = PyDict_GetItem(
+                ts_dict, &_Py_ID(__asyncio_running_event_loop__));  // borrowed
+            if (loop == NULL) {
+                continue;
+            }
+
+            PyObject *id = PyLong_FromUnsignedLong(t->thread_id);
+            if (id == NULL) {
+                goto fail;
+            }
+            int stat = PyDict_SetItem(result, id, loop);
+            Py_DECREF(id);
+            if (stat < 0) {
+                goto fail;
+            }
+        }
+    }
+    goto done;
+
+fail:
+    Py_CLEAR(result);
+
+done:
+    HEAD_UNLOCK(runtime);
+    return result;
+}
+
+
 /***********************************/
 /* Python "auto thread state" API. */
 /***********************************/
