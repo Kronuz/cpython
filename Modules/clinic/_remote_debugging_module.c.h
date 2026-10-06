@@ -288,4 +288,186 @@ _remote_debugging_RemoteUnwinder_get_async_stack_trace(PyObject *self, PyObject 
 
     return return_value;
 }
-/*[clinic end generated code: output=0dd1e6e8bab2a8b1 input=a9049054013a1b77]*/
+
+PyDoc_STRVAR(_remote_debugging_get_gc_stats__doc__,
+"get_gc_stats($module, /, pid, *, all_interpreters=False)\n"
+"--\n"
+"\n"
+"Get garbage collector statistics from external Python process.\n"
+"\n"
+"  all_interpreters\n"
+"    If True, return GC statistics from all interpreters.\n"
+"    If False, return only from main interpreter.\n"
+"\n"
+"Returns:\n"
+"    list of GCStatsInfo: A list of stats samples containing:\n"
+"        - gen: GC generation number.\n"
+"        - iid: Interpreter ID.\n"
+"        - ts_start: Raw timestamp at collection start.\n"
+"        - ts_stop: Raw timestamp at collection stop.\n"
+"        - collections: Total number of collections.\n"
+"        - collected: Total number of collected objects.\n"
+"        - uncollectable: Total number of uncollectable objects.\n"
+"        - candidates: Total objects considered and traversed.\n"
+"        - heap_size: Number of live objects.\n"
+"        - duration: Total collection time, in seconds.\n"
+"\n"
+"Raises:\n"
+"    RuntimeError: If the target process cannot be inspected or if its\n"
+"        debug offsets or GC stats layout are incompatible.");
+
+#define _REMOTE_DEBUGGING_GET_GC_STATS_METHODDEF    \
+    {"get_gc_stats", _PyCFunction_CAST(_remote_debugging_get_gc_stats), METH_FASTCALL|METH_KEYWORDS, _remote_debugging_get_gc_stats__doc__},
+
+static PyObject *
+_remote_debugging_get_gc_stats_impl(PyObject *module, int pid,
+                                    int all_interpreters);
+
+static PyObject *
+_remote_debugging_get_gc_stats(PyObject *module, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames)
+{
+    PyObject *return_value = NULL;
+    #if defined(Py_BUILD_CORE) && !defined(Py_BUILD_CORE_MODULE)
+
+    #define NUM_KEYWORDS 2
+    static struct {
+        PyGC_Head _this_is_not_used;
+        PyObject_VAR_HEAD
+        Py_hash_t ob_hash;
+        PyObject *ob_item[NUM_KEYWORDS];
+    } _kwtuple = {
+        .ob_base = PyVarObject_HEAD_INIT(&PyTuple_Type, NUM_KEYWORDS)
+        .ob_hash = -1,
+        .ob_item = { &_Py_ID(pid), &_Py_ID(all_interpreters), },
+    };
+    #undef NUM_KEYWORDS
+    #define KWTUPLE (&_kwtuple.ob_base.ob_base)
+
+    #else  // !Py_BUILD_CORE
+    #  define KWTUPLE NULL
+    #endif  // !Py_BUILD_CORE
+
+    static const char * const _keywords[] = {"pid", "all_interpreters", NULL};
+    static _PyArg_Parser _parser = {
+        .keywords = _keywords,
+        .fname = "get_gc_stats",
+        .kwtuple = KWTUPLE,
+    };
+    #undef KWTUPLE
+    PyObject *argsbuf[2];
+    Py_ssize_t noptargs = nargs + (kwnames ? PyTuple_GET_SIZE(kwnames) : 0) - 1;
+    int pid;
+    int all_interpreters = 0;
+
+    args = _PyArg_UnpackKeywords(args, nargs, NULL, kwnames, &_parser,
+            /*minpos*/ 1, /*maxpos*/ 1, /*minkw*/ 0, /*varpos*/ 0, argsbuf);
+    if (!args) {
+        goto exit;
+    }
+    pid = PyLong_AsInt(args[0]);
+    if (pid == -1 && PyErr_Occurred()) {
+        goto exit;
+    }
+    if (!noptargs) {
+        goto skip_optional_kwonly;
+    }
+    all_interpreters = PyObject_IsTrue(args[1]);
+    if (all_interpreters < 0) {
+        goto exit;
+    }
+skip_optional_kwonly:
+    return_value = _remote_debugging_get_gc_stats_impl(module, pid, all_interpreters);
+
+exit:
+    return return_value;
+}
+
+PyDoc_STRVAR(_remote_debugging_get_child_pids__doc__,
+"get_child_pids($module, /, pid, *, recursive=True)\n"
+"--\n"
+"\n"
+"Get all child process IDs of the given process.\n"
+"\n"
+"  pid\n"
+"    Process ID of the parent process\n"
+"  recursive\n"
+"    If True, return all descendants (children, grandchildren, etc.).\n"
+"    If False, return only direct children.\n"
+"\n"
+"Returns a list of child process IDs.  Returns an empty list if no\n"
+"children are found.\n"
+"\n"
+"This function provides a snapshot of child processes at a moment in\n"
+"time.  Child processes may exit or new ones may be created after the\n"
+"list is returned.\n"
+"\n"
+"Raises:\n"
+"    OSError: If unable to enumerate processes\n"
+"    NotImplementedError: If not supported on this platform");
+
+#define _REMOTE_DEBUGGING_GET_CHILD_PIDS_METHODDEF    \
+    {"get_child_pids", _PyCFunction_CAST(_remote_debugging_get_child_pids), METH_FASTCALL|METH_KEYWORDS, _remote_debugging_get_child_pids__doc__},
+
+static PyObject *
+_remote_debugging_get_child_pids_impl(PyObject *module, int pid,
+                                      int recursive);
+
+static PyObject *
+_remote_debugging_get_child_pids(PyObject *module, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames)
+{
+    PyObject *return_value = NULL;
+    #if defined(Py_BUILD_CORE) && !defined(Py_BUILD_CORE_MODULE)
+
+    #define NUM_KEYWORDS 2
+    static struct {
+        PyGC_Head _this_is_not_used;
+        PyObject_VAR_HEAD
+        Py_hash_t ob_hash;
+        PyObject *ob_item[NUM_KEYWORDS];
+    } _kwtuple = {
+        .ob_base = PyVarObject_HEAD_INIT(&PyTuple_Type, NUM_KEYWORDS)
+        .ob_hash = -1,
+        .ob_item = { &_Py_ID(pid), &_Py_ID(recursive), },
+    };
+    #undef NUM_KEYWORDS
+    #define KWTUPLE (&_kwtuple.ob_base.ob_base)
+
+    #else  // !Py_BUILD_CORE
+    #  define KWTUPLE NULL
+    #endif  // !Py_BUILD_CORE
+
+    static const char * const _keywords[] = {"pid", "recursive", NULL};
+    static _PyArg_Parser _parser = {
+        .keywords = _keywords,
+        .fname = "get_child_pids",
+        .kwtuple = KWTUPLE,
+    };
+    #undef KWTUPLE
+    PyObject *argsbuf[2];
+    Py_ssize_t noptargs = nargs + (kwnames ? PyTuple_GET_SIZE(kwnames) : 0) - 1;
+    int pid;
+    int recursive = 1;
+
+    args = _PyArg_UnpackKeywords(args, nargs, NULL, kwnames, &_parser,
+            /*minpos*/ 1, /*maxpos*/ 1, /*minkw*/ 0, /*varpos*/ 0, argsbuf);
+    if (!args) {
+        goto exit;
+    }
+    pid = PyLong_AsInt(args[0]);
+    if (pid == -1 && PyErr_Occurred()) {
+        goto exit;
+    }
+    if (!noptargs) {
+        goto skip_optional_kwonly;
+    }
+    recursive = PyObject_IsTrue(args[1]);
+    if (recursive < 0) {
+        goto exit;
+    }
+skip_optional_kwonly:
+    return_value = _remote_debugging_get_child_pids_impl(module, pid, recursive);
+
+exit:
+    return return_value;
+}
+/*[clinic end generated code: output=ee7f8193530065bb input=a9049054013a1b77]*/

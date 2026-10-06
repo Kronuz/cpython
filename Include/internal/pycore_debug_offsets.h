@@ -233,6 +233,7 @@ typedef struct _Py_DebugOffsets {
         uint64_t debugger_script_path;
         uint64_t debugger_script_path_size;
     } debugger_support;
+
 } _Py_DebugOffsets;
 
 

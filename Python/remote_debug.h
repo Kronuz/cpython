@@ -30,6 +30,13 @@ extern "C" {
 #include "pyconfig.h"
 #include "internal/pycore_ceval.h"
 
+#ifdef __APPLE__
+   /* Defines TARGET_OS_OSX.  Newer Apple toolchains predefine the TARGET_OS_*
+      family, older ones do not; without this include the macOS branches below
+      silently compile out and every entry point raises NotImplementedError. */
+#  include <TargetConditionals.h>
+#endif
+
 #ifdef __linux__
 #    include <elf.h>
 #    include <sys/uio.h>
