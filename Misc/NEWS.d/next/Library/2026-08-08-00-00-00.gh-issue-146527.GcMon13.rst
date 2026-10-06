@@ -1,0 +1,12 @@
+Add :func:`!_remote_debugging.get_gc_stats` and
+:func:`!_remote_debugging.get_child_pids`, and record per-collection
+garbage collector statistics into per-generation ring buffers discoverable
+through ``_Py_DebugOffsets``.  This lets an external process read exact GC
+pause times, candidate counts and heap sizes from a running interpreter
+without pausing it or loading anything into it.  Backported from 3.15.
+
+:func:`gc.get_stats` gains two keys per generation, ``candidates`` and
+``duration``, alongside the existing ones.  The addition is backwards
+compatible for code that reads a key by name; code that asserts on the
+exact set of keys needs to tolerate the new ones before a rolling deploy
+puts both interpreters in service at the same time.

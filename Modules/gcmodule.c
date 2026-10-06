@@ -349,10 +349,11 @@ gc_get_stats_impl(PyObject *module)
 
     /* To get consistent values despite allocations while constructing
        the result list, we use a snapshot of the running stats. */
-    GCState *gcstate = get_gc_state();
-    for (i = 0; i < NUM_GENERATIONS; i++) {
-        stats[i] = gcstate->generation_stats[i];
-    }
+    PyInterpreterState *interp = _PyInterpreterState_GET();
+    struct gc_stats *ring = interp->generation_stats;
+    stats[0] = ring->young.items[ring->young.index];
+    stats[1] = ring->old[0].items[ring->old[0].index];
+    stats[2] = ring->old[1].items[ring->old[1].index];
 
     PyObject *result = PyList_New(0);
     if (result == NULL)
@@ -361,10 +362,12 @@ gc_get_stats_impl(PyObject *module)
     for (i = 0; i < NUM_GENERATIONS; i++) {
         PyObject *dict;
         st = &stats[i];
-        dict = Py_BuildValue("{snsnsn}",
+        dict = Py_BuildValue("{snsnsnsnsd}",
                              "collections", st->collections,
                              "collected", st->collected,
-                             "uncollectable", st->uncollectable
+                             "uncollectable", st->uncollectable,
+                             "candidates", st->candidates,
+                             "duration", st->duration
                             );
         if (dict == NULL)
             goto error;
