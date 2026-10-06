@@ -37,7 +37,6 @@ import re
 import types
 import __main__
 import warnings
-import types
 
 __all__ = ["Completer"]
 
