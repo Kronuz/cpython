@@ -2794,6 +2794,67 @@ done:
 }
 
 
+/* The implementation of sys._current_loops().  This is intended to be
+   called with the GIL held, as it will be when called via
+   sys._current_loops().  It's possible it would work fine even without
+   the GIL held, but haven't thought enough about that.
+*/
+PyObject *
+_PyThread_CurrentLoops(void)
+{
+    _PyRuntimeState *runtime = &_PyRuntime;
+    PyThreadState *tstate = current_fast_get();
+
+    _Py_EnsureTstateNotNULL(tstate);
+
+    if (_PySys_Audit(tstate, "sys._current_loops", NULL) < 0) {
+        return NULL;
+    }
+
+    PyObject *result = PyDict_New();
+    if (result == NULL) {
+        return NULL;
+    }
+
+    /* for t in all of the current interpreter's thread states:
+     *     if t has a running asyncio loop, map t's id to that loop
+     * Because these lists can mutate even when the GIL is held, we
+     * need to grab head_mutex for the duration.
+     */
+    PyInterpreterState *interp = tstate->interp;
+    _PyEval_StopTheWorld(interp);
+    HEAD_LOCK(runtime);
+    _Py_FOR_EACH_TSTATE_UNLOCKED(interp, t) {
+        /* In Python 3.13+, the running event loop is stored in the
+           _PyThreadStateImpl struct rather than in the thread dict. */
+        _PyThreadStateImpl *ts = (_PyThreadStateImpl *)t;
+        PyObject *loop = ts->asyncio_running_loop;
+        if (loop == NULL || loop == Py_None) {
+            continue;
+        }
+
+        PyObject *id = PyLong_FromUnsignedLong(t->thread_id);
+        if (id == NULL) {
+            goto fail;
+        }
+        int stat = PyDict_SetItem(result, id, loop);
+        Py_DECREF(id);
+        if (stat < 0) {
+            goto fail;
+        }
+    }
+    goto done;
+
+fail:
+    Py_CLEAR(result);
+
+done:
+    HEAD_UNLOCK(runtime);
+    _PyEval_StartTheWorld(interp);
+    return result;
+}
+
+
 /***********************************/
 /* Python "auto thread state" API. */
 /***********************************/

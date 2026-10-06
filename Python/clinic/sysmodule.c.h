@@ -1209,6 +1209,26 @@ sys__current_exceptions(PyObject *module, PyObject *Py_UNUSED(ignored))
     return sys__current_exceptions_impl(module);
 }
 
+PyDoc_STRVAR(sys__current_loops__doc__,
+"_current_loops($module, /)\n"
+"--\n"
+"\n"
+"Return a dict mapping each thread\'s identifier to its currently running asyncio loop.\n"
+"\n"
+"This function should be used for specialized purposes only.");
+
+#define SYS__CURRENT_LOOPS_METHODDEF    \
+    {"_current_loops", (PyCFunction)sys__current_loops, METH_NOARGS, sys__current_loops__doc__},
+
+static PyObject *
+sys__current_loops_impl(PyObject *module);
+
+static PyObject *
+sys__current_loops(PyObject *module, PyObject *Py_UNUSED(ignored))
+{
+    return sys__current_loops_impl(module);
+}
+
 PyDoc_STRVAR(sys_call_tracing__doc__,
 "call_tracing($module, func, args, /)\n"
 "--\n"
