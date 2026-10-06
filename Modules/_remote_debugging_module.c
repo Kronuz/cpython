@@ -29,7 +29,7 @@
 #include <internal/pycore_pyerrors.h>       // _PyErr_Format
 #include <internal/pycore_pystate.h>        // _PyInterpreterState_GET
 
-#if !defined(__wasi__) && !defined(__EMSCRIPTEN__)
+#if !defined(__wasi__) && !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
 
 /* 3.12's configure has no AC_CHECK_FUNCS([process_vm_readv]); that check
  * arrived with 3.13's _testexternalinspection.  remote_debug.h defaults the
@@ -1002,22 +1002,19 @@ PyInit__remote_debugging(void)
     return PyModuleDef_Init(&remote_debugging_module);
 }
 
-#else  /* __wasi__ || __EMSCRIPTEN__ */
+#else  /* __wasi__ || __EMSCRIPTEN__ || __ANDROID__ */
 
-/* Out-of-process GC statistics require reading another process's memory, which
-   WASI and Emscripten cannot do; upstream 3.14 marks _remote_debugging N/A on
-   these targets.  Build a trivial module so the shared-build relocations of the
-   gc-stats static descriptors never arise. */
-static struct PyModuleDef remote_debugging_module = {
-    PyModuleDef_HEAD_INIT,
-    .m_name = "_remote_debugging",
-    .m_size = 0,
-};
-
+/* Out-of-process GC statistics require reading another process's memory. WASI
+   and Emscripten have no process model, and the bionic (Android) build lacks
+   the glibc section-scan helper this backport relies on. Upstream 3.14 marks
+   _remote_debugging N/A on such targets via configure; this tree has no
+   matching autoconf to regenerate, so fail the import instead. The init holds
+   no static data, so nothing here needs a shared-build relocation. */
 PyMODINIT_FUNC
 PyInit__remote_debugging(void)
 {
-    return PyModuleDef_Init(&remote_debugging_module);
+    PyErr_SetNone(PyExc_ImportError);
+    return NULL;
 }
 
-#endif  /* !__wasi__ && !__EMSCRIPTEN__ */
+#endif  /* !__wasi__ && !__EMSCRIPTEN__ && !__ANDROID__ */
