@@ -1,93 +1,187 @@
-"""Tests for _remote_debugging.get_gc_stats() and get_child_pids().
+"""Tests for the out-of-process GC statistics exposed by _remote_debugging.
 
-Adapted from upstream 3.15's Lib/test/test_gc_stats.py (GH-148071).  The
-upstream file drives targets through
-test.test_profiling.test_sampling_profiler.helpers and gates itself on
-test.support.requires_remote_subprocess_debugging(); neither exists on 3.12,
-so the subprocess plumbing here follows the conventions of this branch's
-test_external_inspection instead.  The assertions are upstream's.
+Backported from upstream 3.15's Lib/test/test_gc_stats.py.  Two adaptations are
+forced by what the backport ships:
+
+  * The backport exposes the module-level ``_remote_debugging.get_gc_stats``
+    and ``GCStatsInfo`` but neither the ``GCMonitor`` class nor
+    ``is_python_process``.  Calls upstream makes through
+    ``GCMonitor(pid).get_gc_stats(...)`` use ``get_gc_stats(pid, ...)`` here,
+    and the local/remote debugging gates probe with ``get_gc_stats`` instead of
+    ``is_python_process``.
+  * Upstream imports ``test_subprocess`` from
+    ``test.test_profiling.test_sampling_profiler.helpers`` and
+    ``requires_remote_subprocess_debugging`` from ``test.support``; the
+    sampling-profiler package and that helper do not exist before 3.15, so both
+    are vendored below.
+
+Downstream-only tests (ring geometry, heap_size, child-pid enumeration) live in
+cleanpython3NN/tests/linkedin/, not here.
 """
 
 import contextlib
+import gc
 import os
-import signal
+import socket
 import subprocess
 import sys
 import textwrap
 import time
 import unittest
+from collections import namedtuple
 
-from test.support import (
-    SHORT_TIMEOUT,
-    busy_retry,
-    requires_subprocess,
-)
-from test.support import os_helper
-from test.support.script_helper import make_script
+from test.support import SHORT_TIMEOUT, import_helper
 
-# 3.12 has no free-threaded build, so test.support ships neither
-# Py_GIL_DISABLED nor requires_gil_enabled.  The GIL is always enabled here.
 try:
     from test.support import Py_GIL_DISABLED
 except ImportError:
-    Py_GIL_DISABLED = False
+    Py_GIL_DISABLED = False  # 3.12 builds no free-threaded variant
+
 try:
     from test.support import requires_gil_enabled
 except ImportError:
-    def requires_gil_enabled(msg="needs the GIL enabled"):
+    def requires_gil_enabled(reason="requires the GIL"):  # 3.12: GIL always on
         return lambda func: func
+from test.support.socket_helper import find_unused_port
 
 try:
-    import _remote_debugging
+    import _remote_debugging  # noqa: F401
 except ImportError:
     raise unittest.SkipTest(
         "Test only runs when _remote_debugging is available"
     )
 
+from importlib.util import find_spec
 
-GC_STATS_FIELDS = (
-    "gen", "iid", "ts_start", "ts_stop", "collections", "collected",
-    "uncollectable", "candidates", "heap_size", "duration")
-
-# The GIL build keeps a ring per generation (11 slots for gen 0, 3 each for
-# gens 1 and 2).  The free-threaded build keeps a single slot per generation,
-# so it reports one record each.
-EXPECTED_RECORD_COUNT = 3 if Py_GIL_DISABLED else 17
+# concurrent.interpreters is public only on 3.14+; on 3.12/3.13 the
+# subinterpreter-driven tests below are skipped rather than adapted onto the
+# private test-support shim.
+_HAS_SUBINTERPRETERS = find_spec("concurrent.interpreters") is not None
 
 
-def has_local_process_debugging():
-    """True when this platform lets us read our own process memory.
+# --- vendored from v3.15.0rc3
+#     Lib/test/test_profiling/test_sampling_profiler/helpers.py (profiler
+#     imports dropped; the context manager is self-contained) ---
 
-    macOS needs root or the com.apple.system-task-ports entitlement even for
-    the calling process, so the whole module is skipped there rather than
-    reporting spurious failures.
-    """
+SubprocessInfo = namedtuple("SubprocessInfo", ["process", "socket"])
+
+
+def _wait_for_signal(sock, expected_signals, timeout=SHORT_TIMEOUT):
+    if isinstance(expected_signals, bytes):
+        expected_signals = [expected_signals]
+    sock.settimeout(timeout)
+    buffer = b""
+    while True:
+        if all(sig in buffer for sig in expected_signals):
+            return buffer
+        try:
+            chunk = sock.recv(4096)
+            if not chunk:
+                raise RuntimeError(
+                    f"Connection closed before receiving expected signals. "
+                    f"Expected: {expected_signals}, Got: {buffer[-200:]!r}"
+                )
+            buffer += chunk
+        except socket.timeout:
+            raise RuntimeError(
+                f"Timeout waiting for signals. "
+                f"Expected: {expected_signals}, Got: {buffer[-200:]!r}"
+            ) from None
+        except OSError as e:
+            raise RuntimeError(
+                f"Socket error while waiting for signals: {e}. "
+                f"Expected: {expected_signals}, Got: {buffer[-200:]!r}"
+            ) from None
+
+
+def _cleanup_sockets(*sockets):
+    for sock in sockets:
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+
+def _cleanup_process(proc, timeout=SHORT_TIMEOUT):
+    if proc.poll() is not None:
+        return
+    proc.terminate()
     try:
-        _remote_debugging.get_gc_stats(os.getpid(), all_interpreters=False)
-    except Exception:
-        return False
-    return True
+        proc.wait(timeout=timeout)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    proc.kill()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        pass
 
 
-def has_remote_process_debugging():
-    """True when this platform lets us read *another* process's memory.
+@contextlib.contextmanager
+def test_subprocess(script, wait_for_working=False):
+    port = find_unused_port()
+    socket_code = f"""
+import socket
+_test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+_test_sock.connect(('localhost', {port}))
+_test_sock.sendall(b"ready")
+"""
+    full_script = socket_code + script
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_socket.bind(("localhost", port))
+    server_socket.settimeout(SHORT_TIMEOUT)
+    server_socket.listen(1)
+    proc = subprocess.Popen(
+        [sys.executable, "-c", full_script],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    client_socket = None
+    try:
+        client_socket, _ = server_socket.accept()
+        server_socket.close()
+        server_socket = None
+        if wait_for_working:
+            _wait_for_signal(client_socket, [b"ready", b"working"])
+        else:
+            _wait_for_signal(client_socket, b"ready")
+        yield SubprocessInfo(proc, client_socket)
+    finally:
+        _cleanup_sockets(client_socket, server_socket)
+        _cleanup_process(proc)
 
-    Reading our own task port and reading a child's are different privileges
-    on macOS: task_for_pid() on any other pid needs root or the
-    com.apple.system-task-ports entitlement, so a plain developer build
-    passes has_local_process_debugging() and still cannot attach to a child.
-    Linux with ptrace_scope 0 and Windows allow both.
+
+# --- vendored from v3.15.0rc3 Lib/test/support/__init__.py, with
+#     is_python_process(pid) substituted by get_gc_stats(pid) because the
+#     backport has no is_python_process ---
+
+def has_remote_subprocess_debugging():
+    """Whether this platform lets us read another process's GC stats.
+
+    macOS without the com.apple.system-task-ports entitlement reaches here and
+    returns False, matching upstream's gate.
     """
+    if sys.platform not in ("linux", "darwin", "win32"):
+        return False
     if not has_local_process_debugging():
         return False
-    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     try:
-        for _ in busy_retry(SHORT_TIMEOUT, error=False):
+        deadline = time.monotonic() + SHORT_TIMEOUT
+        while time.monotonic() < deadline:
             try:
                 _remote_debugging.get_gc_stats(proc.pid, all_interpreters=False)
             except PermissionError:
                 return False
             except Exception:
+                time.sleep(0.01)
                 continue
             return True
         return False
@@ -96,21 +190,51 @@ def has_remote_process_debugging():
         proc.wait()
 
 
-def get_generations(gc_stats):
-    return tuple(sorted({s.gen for s in gc_stats}))
+def requires_remote_subprocess_debugging():
+    """Skip when remote subprocess debugging is unavailable.
+
+    Mirrors test.support.requires_remote_subprocess_debugging, which also
+    implies subprocess support.
+    """
+    return unittest.skipUnless(
+        has_remote_subprocess_debugging(),
+        "requires remote subprocess debugging permissions",
+    )
 
 
-def get_interpreter_identifiers(gc_stats):
+GC_STATS_FIELDS = (
+    "gen", "iid", "ts_start", "ts_stop", "collections", "collected",
+    "uncollectable", "candidates", "heap_size", "duration")
+
+
+def get_interpreter_identifiers(gc_stats) -> tuple[int, ...]:
     return tuple(sorted({s.iid for s in gc_stats}))
 
 
-def get_last_item(gc_stats, generation, iid):
+def get_generations(gc_stats) -> tuple[int, int, int]:
+    generations = set()
+    for s in gc_stats:
+        generations.add(s.gen)
+    return tuple(sorted(generations))
+
+
+def get_last_item(gc_stats, generation: int, iid: int):
     item = None
     for s in gc_stats:
         if s.gen == generation and s.iid == iid:
             if item is None or item.ts_start < s.ts_start:
                 item = s
     return item
+
+
+def has_local_process_debugging():
+    # Upstream calls _remote_debugging.is_python_process(os.getpid()); the
+    # backport has no such entry, so probe with get_gc_stats().
+    try:
+        _remote_debugging.get_gc_stats(os.getpid(), all_interpreters=False)
+    except Exception:
+        return False
+    return True
 
 
 def check_gc_stats_fields(testcase, stats):
@@ -122,221 +246,297 @@ def check_gc_stats_fields(testcase, stats):
         testcase.assertEqual(len(item), len(GC_STATS_FIELDS))
 
 
+def gc_stats_counters_advanced(before_stats, after_stats, generations, iid):
+    for generation in generations:
+        before = get_last_item(before_stats, generation, iid)
+        after = get_last_item(after_stats, generation, iid)
+        if after is None or before is None:
+            return False
+        if after.duration <= before.duration:
+            return False
+        if after.candidates <= before.candidates:
+            return False
+    return True
+
+
 @unittest.skipUnless(
     has_local_process_debugging(), "requires local process debugging")
-class TestGetGCStats(unittest.TestCase):
+class TestLocalGCStats(unittest.TestCase):
 
-    def test_fields(self):
+    _main_iid = 0  # main interpreter ID
+
+    # Upstream's test_gc_stats_fields exercises GCMonitor(pid).get_gc_stats();
+    # the backport has no GCMonitor, so only the module-level form below runs.
+
+    def test_module_get_gc_stats_fields(self):
         stats = _remote_debugging.get_gc_stats(
             os.getpid(), all_interpreters=False)
         check_gc_stats_fields(self, stats)
 
-    def test_all_generations_reported(self):
-        stats = _remote_debugging.get_gc_stats(
-            os.getpid(), all_interpreters=False)
-        self.assertEqual(get_generations(stats), (0, 1, 2))
+    def test_all_interpreters_filter_for_local_process(self):
+        interpreters = import_helper.import_module("concurrent.interpreters")
+        source = """
+            import gc
+            objects = []
+            obj = []
+            obj.append(obj)
+            objects.append(obj)
+            gc.collect(0)
+            gc.collect(1)
+            gc.collect(2)
+        """
+        interp = interpreters.create()
+        try:
+            interp.exec(textwrap.dedent(source))
+            for generation in range(3):
+                gc.collect(generation)
 
-    def test_record_count_is_the_whole_ring(self):
-        # get_gc_stats() returns every slot, not just the written ones: the
-        # caller de-duplicates on `collections`.
-        stats = _remote_debugging.get_gc_stats(
-            os.getpid(), all_interpreters=False)
-        self.assertEqual(len(stats), EXPECTED_RECORD_COUNT)
+            main_stats = _remote_debugging.get_gc_stats(
+                os.getpid(), all_interpreters=False)
+            all_stats = _remote_debugging.get_gc_stats(
+                os.getpid(), all_interpreters=True)
+        finally:
+            interp.close()
 
-    def test_main_interpreter_only_by_default(self):
-        stats = _remote_debugging.get_gc_stats(
-            os.getpid(), all_interpreters=False)
-        self.assertEqual(get_interpreter_identifiers(stats), (0,))
+        self.assertEqual(get_interpreter_identifiers(main_stats), (0,))
+        self.assertIn(0, get_interpreter_identifiers(all_stats))
+        self.assertGreater(len(get_interpreter_identifiers(all_stats)), 1)
+        self.assertEqual(get_generations(main_stats), (0, 1, 2))
+        self.assertEqual(get_generations(all_stats), (0, 1, 2))
+        for iid in get_interpreter_identifiers(all_stats):
+            for generation in range(3):
+                self.assertIsNotNone(get_last_item(all_stats, generation, iid))
 
-    def test_incomplete_slots_are_identifiable(self):
-        # A slot that was never written has ts_start == ts_stop == 0, which
-        # is how a reader tells it apart from a finished collection.
-        stats = _remote_debugging.get_gc_stats(
+    @unittest.skipUnless(Py_GIL_DISABLED, "requires free-threaded GC")
+    def test_gc_stats_counters_for_main_interpreter_free_threaded(self):
+        generations = (0, 1, 2)
+        before_stats = _remote_debugging.get_gc_stats(
             os.getpid(), all_interpreters=False)
-        for item in stats:
-            self.assertLessEqual(item.ts_start, item.ts_stop)
+        for generation in generations:
+            self.assertIsNotNone(
+                get_last_item(before_stats, generation, self._main_iid))
 
-    @requires_gil_enabled("needs a multi-slot ring")
-    def test_completed_records_are_ordered_and_cumulative(self):
-        import gc
-        gc.collect(0)
-        gc.collect(0)
-        stats = _remote_debugging.get_gc_stats(
+        objects = []
+        for _ in range(1000):
+            obj = []
+            obj.append(obj)
+            objects.append(obj)
+        for generation in generations:
+            gc.collect(generation)
+
+        after_stats = _remote_debugging.get_gc_stats(
             os.getpid(), all_interpreters=False)
-        gen0 = sorted(
-            (s for s in stats if s.gen == 0 and s.ts_start < s.ts_stop),
-            key=lambda s: s.ts_start,
+        self.assertTrue(
+            gc_stats_counters_advanced(
+                before_stats, after_stats, generations, self._main_iid),
+            (before_stats, after_stats)
         )
-        self.assertGreaterEqual(len(gen0), 2)
-        for earlier, later in zip(gen0, gen0[1:]):
-            # The counters accumulate, so a later record never goes backwards.
-            self.assertLess(earlier.ts_start, later.ts_start)
-            self.assertLess(earlier.collections, later.collections)
-            self.assertLessEqual(earlier.collected, later.collected)
-            self.assertLessEqual(earlier.candidates, later.candidates)
-            self.assertLessEqual(earlier.duration, later.duration)
-
-    def test_counters_advance_after_collections(self):
-        import gc
-        before = _remote_debugging.get_gc_stats(
-            os.getpid(), all_interpreters=False)
-        for _ in range(20):
-            a = {}
-            b = {"a": a}
-            a["b"] = b
-            del a, b
-        gc.collect(0)
-        after = _remote_debugging.get_gc_stats(
-            os.getpid(), all_interpreters=False)
-
-        before_item = get_last_item(before, 0, 0)
-        after_item = get_last_item(after, 0, 0)
-        self.assertIsNotNone(before_item)
-        self.assertIsNotNone(after_item)
-        self.assertGreater(after_item.collections, before_item.collections)
-        self.assertGreater(after_item.candidates, before_item.candidates)
-        self.assertGreater(after_item.duration, before_item.duration)
-
-    def test_heap_size_is_zero_by_design_on_312(self):
-        # This patch adds no hooks to object tracking or untracking, so
-        # there is no running live-object count to publish; keeping the
-        # ring's cost confined to collection boundaries is what makes it
-        # unmeasurable. gc.get_stats() does not expose heap_size at all;
-        # this asserts the ring field is present and zero rather than
-        # absent or garbage.
-        stats = _remote_debugging.get_gc_stats(
-            os.getpid(), all_interpreters=False)
-        item = get_last_item(stats, 0, 0)
-        self.assertIsNotNone(item)
-        self.assertEqual(item.heap_size, 0)
-
-    def test_bad_pid_raises(self):
-        # PID 0 is never a Python process we can inspect.
-        with self.assertRaises((RuntimeError, PermissionError, OSError,
-                                ValueError)):
-            _remote_debugging.get_gc_stats(0, all_interpreters=False)
 
 
-@unittest.skipUnless(
-    has_remote_process_debugging(), "requires remote process debugging")
-@requires_subprocess()
-class TestGetGCStatsRemote(unittest.TestCase):
+@requires_remote_subprocess_debugging()
+class TestGCStats(unittest.TestCase):
 
-    def test_reads_another_process(self):
-        with os_helper.temp_dir() as work_dir:
-            script = make_script(work_dir, "gcworkload", textwrap.dedent("""
-                import time
-                class N:
-                    def __init__(self):
-                        self.ref = None
-                while True:
-                    for _ in range(500):
-                        a, b = N(), N()
-                        a.ref = b
-                        b.ref = a
-                    time.sleep(0.005)
-            """))
-            proc = subprocess.Popen([sys.executable, script])
-            try:
-                # A process that has not finished initializing has no
-                # interpreter state to walk yet, so get_gc_stats() raises
-                # RuntimeError.  That is transient, and a monitor is expected
-                # to retry rather than give up; gcmon maps it to a
-                # not-yet-pollable status.
-                collections = None
-                for _ in busy_retry(SHORT_TIMEOUT, error=False):
-                    try:
-                        stats = _remote_debugging.get_gc_stats(
-                            proc.pid, all_interpreters=True)
-                    except RuntimeError:
-                        continue
-                    check_gc_stats_fields(self, stats)
-                    done = [s for s in stats
-                            if s.gen == 0 and s.ts_start < s.ts_stop]
-                    if done:
-                        collections = max(s.collections for s in done)
-                        break
-                self.assertIsNotNone(
-                    collections, "target never reported a gen 0 collection")
+    @classmethod
+    def setUpClass(cls):
+        cls._main_iid = 0  # main interpreter ID
+        cls._main_interpreter_script = '''
+            import gc
+            import time
 
-                # The target keeps allocating, so the counter must advance.
-                for _ in busy_retry(SHORT_TIMEOUT, error=False):
-                    stats = _remote_debugging.get_gc_stats(
-                        proc.pid, all_interpreters=True)
-                    done = [s for s in stats
-                            if s.gen == 0 and s.ts_start < s.ts_stop]
-                    if done and max(s.collections for s in done) > collections:
-                        break
-                else:
-                    self.fail("gen 0 collections never advanced")
-            finally:
-                proc.terminate()
-                proc.wait()
+            gc.collect(0)
+            gc.collect(1)
+            gc.collect(2)
 
-    def test_exited_process_fails_cleanly(self):
-        proc = subprocess.Popen([sys.executable, "-c", "pass"])
-        proc.wait()
-        with self.assertRaises((RuntimeError, PermissionError, OSError)):
-            _remote_debugging.get_gc_stats(proc.pid, all_interpreters=True)
+            _test_sock.sendall(b"working")
+            objects = []
+            while True:
+                if len(objects) > 100:
+                    objects = []
 
+                obj = []
+                obj.append(obj)
+                objects.append(obj)
 
-@requires_subprocess()
-class TestGetChildPids(unittest.TestCase):
+                time.sleep(0.1)
+                gc.collect(0)
+                gc.collect(1)
+                gc.collect(2)
+            '''
+        cls._script = '''
+            import gc
+            import time
 
-    def test_no_children(self):
-        pids = _remote_debugging.get_child_pids(os.getpid(), recursive=True)
-        self.assertIsInstance(pids, list)
+            source = """if True:
+                import gc
 
-    def test_direct_child_is_reported(self):
-        proc = subprocess.Popen(
-            [sys.executable, "-c", "import time; time.sleep(30)"])
-        try:
-            for _ in busy_retry(SHORT_TIMEOUT, error=False):
-                pids = _remote_debugging.get_child_pids(
-                    os.getpid(), recursive=False)
-                if proc.pid in pids:
+                if "objects" not in globals():
+                    objects = []
+                if len(objects) > 100:
+                    objects = []
+
+                obj = []
+                obj.append(obj)
+                objects.append(obj)
+
+                gc.collect(0)
+                gc.collect(1)
+                gc.collect(2)
+            """
+
+            if {0}:
+                import concurrent.interpreters as interpreters
+                interp = interpreters.create()
+                interp.exec(source)
+
+            gc.collect(0)
+            gc.collect(1)
+            gc.collect(2)
+
+            _test_sock.sendall(b"working")
+            objects = []
+            while True:
+                if len(objects) > 100:
+                    objects = []
+
+                obj = []
+                obj.append(obj)
+                objects.append(obj)
+
+                time.sleep(0.1)
+                if {0}:
+                    interp.exec(source)
+                gc.collect(0)
+                gc.collect(1)
+                gc.collect(2)
+            '''
+
+    def _get_gc_stats(self, pid, all_interpreters):
+        # Upstream caches offsets in GCMonitor(pid); the backport re-resolves
+        # them per call via the module-level entry.
+        return _remote_debugging.get_gc_stats(
+            pid, all_interpreters=all_interpreters)
+
+    def _gc_stats_advanced(self, before_stats, after_stats, generations):
+        for generation in generations:
+            before = get_last_item(before_stats, generation, self._main_iid)
+            after = get_last_item(after_stats, generation, self._main_iid)
+            if after is None or before is None:
+                return False
+            if after.ts_stop <= before.ts_stop:
+                return False
+        return True
+
+    def _collect_gc_stats(self, script: str, all_interpreters: bool,
+                          generations=(2,)):
+        with (test_subprocess(script, wait_for_working=True) as subproc):
+            pid = subproc.process.pid
+            before_stats = self._get_gc_stats(pid, all_interpreters)
+            for generation in generations:
+                before = get_last_item(before_stats, generation, self._main_iid)
+                self.assertIsNotNone(before)
+
+            after_stats = before_stats
+            for _ in range(10):
+                time.sleep(0.5)
+                after_stats = self._get_gc_stats(pid, all_interpreters)
+                if self._gc_stats_advanced(before_stats, after_stats, generations):
                     break
             else:
-                self.fail(f"child {proc.pid} never appeared in {pids}")
-        finally:
-            proc.terminate()
-            proc.wait()
+                self.fail(
+                    f"GC stats for generations {generations!r} did not "
+                    f"advance: {before_stats!r} -> {after_stats!r}"
+                )
 
-    def test_recursive_finds_grandchild(self):
-        code = textwrap.dedent("""
-            import subprocess, sys, time
-            p = subprocess.Popen(
-                [sys.executable, '-c', 'import time; time.sleep(30)'])
-            print(p.pid, flush=True)
-            time.sleep(30)
-        """)
-        proc = subprocess.Popen([sys.executable, "-c", code],
-                                stdout=subprocess.PIPE, text=True)
-        grandchild = None
-        try:
-            grandchild = int(proc.stdout.readline().strip())
-            for _ in busy_retry(SHORT_TIMEOUT, error=False):
-                pids = _remote_debugging.get_child_pids(
-                    os.getpid(), recursive=True)
-                if grandchild in pids:
-                    break
-            else:
-                self.fail(f"grandchild {grandchild} not in {pids}")
+        return before_stats, after_stats
 
-            shallow = _remote_debugging.get_child_pids(
-                os.getpid(), recursive=False)
-            self.assertNotIn(grandchild, shallow)
-        finally:
-            proc.terminate()
-            proc.wait()
-            # proc.terminate() does not reach the grandchild, and an orphan
-            # that keeps running holds the test's working directory open on
-            # Windows, so regrtest cannot clean it up.
-            if grandchild is not None:
-                with contextlib.suppress(ProcessLookupError, OSError):
-                    os.kill(grandchild, signal.SIGTERM)
-            with contextlib.suppress(Exception):
-                proc.stdout.close()
+    def _check_gc_stats(self, before, after):
+        self.assertIsNotNone(before)
+        self.assertIsNotNone(after)
+
+        self.assertGreater(after.collections, before.collections, (before, after))
+        self.assertGreater(after.ts_start, before.ts_start, (before, after))
+        self.assertGreater(after.ts_stop, before.ts_stop, (before, after))
+        self.assertGreater(after.duration, before.duration, (before, after))
+
+        self.assertGreater(after.candidates, before.candidates, (before, after))
+
+        # may not grow
+        self.assertGreaterEqual(after.collected, before.collected, (before, after))
+        self.assertGreaterEqual(after.uncollectable, before.uncollectable, (before, after))
+
+    def _check_interpreter_gc_stats(self, before_stats, after_stats):
+        before_iids = get_interpreter_identifiers(before_stats)
+        after_iids = get_interpreter_identifiers(after_stats)
+
+        self.assertEqual(before_iids, after_iids)
+
+        self.assertEqual(get_generations(before_stats), (0, 1, 2))
+        self.assertEqual(get_generations(after_stats), (0, 1, 2))
+
+        for iid in after_iids:
+            with self.subTest(f"interpreter id={iid}"):
+                before_last_items = (get_last_item(before_stats, 0, iid),
+                                     get_last_item(before_stats, 1, iid),
+                                     get_last_item(before_stats, 2, iid))
+
+                after_last_items = (get_last_item(after_stats, 0, iid),
+                                    get_last_item(after_stats, 1, iid),
+                                    get_last_item(after_stats, 2, iid))
+
+                for before, after in zip(before_last_items, after_last_items):
+                    self._check_gc_stats(before, after)
+
+    def test_gc_stats_timestamps_for_main_interpreter(self):
+        script = textwrap.dedent(self._main_interpreter_script)
+        before_stats, after_stats = self._collect_gc_stats(
+            script, False, generations=(0, 1, 2))
+
+        for generation in range(3):
+            with self.subTest(generation=generation):
+                before = get_last_item(before_stats, generation, self._main_iid)
+                after = get_last_item(after_stats, generation, self._main_iid)
+
+                self.assertIsNotNone(before)
+                self.assertIsNotNone(after)
+                self.assertGreater(
+                    after.collections, before.collections,
+                    (before, after))
+                self.assertGreater(
+                    after.ts_start, before.ts_start,
+                    (before, after))
+                self.assertGreater(
+                    after.ts_stop, before.ts_stop,
+                    (before, after))
+
+    @requires_gil_enabled()
+    def test_gc_stats_for_main_interpreter(self):
+        script = textwrap.dedent(self._script.format(False))
+        before_stats, after_stats = self._collect_gc_stats(script, False)
+
+        self._check_interpreter_gc_stats(before_stats, after_stats)
+
+    @unittest.skipUnless(_HAS_SUBINTERPRETERS, "concurrent.interpreters is 3.14+")
+    @requires_gil_enabled()
+    def test_gc_stats_for_main_interpreter_if_subinterpreter_exists(self):
+        script = textwrap.dedent(self._script.format(True))
+        before_stats, after_stats = self._collect_gc_stats(script, False)
+
+        self._check_interpreter_gc_stats(before_stats, after_stats)
+
+    @unittest.skipUnless(_HAS_SUBINTERPRETERS, "concurrent.interpreters is 3.14+")
+    @requires_gil_enabled()
+    def test_gc_stats_for_all_interpreters(self):
+        script = textwrap.dedent(self._script.format(True))
+        before_stats, after_stats = self._collect_gc_stats(script, True)
+
+        before_iids = get_interpreter_identifiers(before_stats)
+        after_iids = get_interpreter_identifiers(after_stats)
+
+        self.assertGreater(len(before_iids), 1)
+        self.assertGreater(len(after_iids), 1)
+        self.assertEqual(before_iids, after_iids)
+
+        self._check_interpreter_gc_stats(before_stats, after_stats)
 
 
 if __name__ == "__main__":
