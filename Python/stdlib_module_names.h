@@ -62,6 +62,7 @@ static const char* _Py_stdlib_module_names[] = {
 "_pylong",
 "_queue",
 "_random",
+"_remote_debugging",
 "_scproxy",
 "_sha1",
 "_sha2",
