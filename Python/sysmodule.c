@@ -2164,6 +2164,21 @@ sys__current_exceptions_impl(PyObject *module)
 }
 
 /*[clinic input]
+sys._current_loops
+
+Return a dict mapping each thread id to its running asyncio loop.
+
+This function should be used for specialized purposes only.
+[clinic start generated code]*/
+
+static PyObject *
+sys__current_loops_impl(PyObject *module)
+/*[clinic end generated code: output=b20ec1934a94f051 input=8028544854d5099d]*/
+{
+    return _PyThread_CurrentLoops();
+}
+
+/*[clinic input]
 sys.call_tracing
 
     func: object
@@ -2919,6 +2934,7 @@ static PyMethodDef sys_methods[] = {
     SYS__CLEAR_TYPE_CACHE_METHODDEF
     SYS__CURRENT_FRAMES_METHODDEF
     SYS__CURRENT_EXCEPTIONS_METHODDEF
+    SYS__CURRENT_LOOPS_METHODDEF
     SYS_DISPLAYHOOK_METHODDEF
     SYS_EXCEPTION_METHODDEF
     SYS_EXC_INFO_METHODDEF
