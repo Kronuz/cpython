@@ -796,6 +796,7 @@ _PyStaticObjects_CheckRefcnt(PyInterpreterState *interp) {
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(alias));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(align));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(all));
+    _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(all_interpreters));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(all_threads));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(allow_code));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(any));
@@ -1194,6 +1195,7 @@ _PyStaticObjects_CheckRefcnt(PyInterpreterState *interp) {
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(readline));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(readonly));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(real));
+    _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(recursive));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(reducer_override));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(registry));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(rel_tol));
