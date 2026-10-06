@@ -10,6 +10,7 @@ test_external_inspection instead.  The assertions are upstream's.
 
 import contextlib
 import os
+import signal
 import subprocess
 import sys
 import textwrap
@@ -301,6 +302,7 @@ class TestGetChildPids(unittest.TestCase):
         """)
         proc = subprocess.Popen([sys.executable, "-c", code],
                                 stdout=subprocess.PIPE, text=True)
+        grandchild = None
         try:
             grandchild = int(proc.stdout.readline().strip())
             for _ in busy_retry(SHORT_TIMEOUT, error=False):
@@ -317,6 +319,12 @@ class TestGetChildPids(unittest.TestCase):
         finally:
             proc.terminate()
             proc.wait()
+            # proc.terminate() does not reach the grandchild, and an orphan
+            # that keeps running holds the test's working directory open on
+            # Windows, so regrtest cannot clean it up.
+            if grandchild is not None:
+                with contextlib.suppress(ProcessLookupError, OSError):
+                    os.kill(grandchild, signal.SIGTERM)
             with contextlib.suppress(Exception):
                 proc.stdout.close()
 
