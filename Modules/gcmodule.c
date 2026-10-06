@@ -38,6 +38,19 @@
 #  include <mach-o/loader.h>    // SEG_DATA
 #endif
 
+/* 3.12's internal atomics leave _Py_atomic_thread_fence undefined on the MSVC
+   target; the seqcount publisher below is its first user. _Interlocked* stores
+   are already full barriers, so a hardware fence here is enough. Windows is not
+   a shipped target, so this stays out of the production patch. */
+#if defined(_MSC_VER) && !defined(_Py_atomic_thread_fence)
+#  include <intrin.h>
+#  if defined(_M_ARM64) || defined(_M_ARM)
+#    define _Py_atomic_thread_fence(order) __dmb(0xB)  // _ARM64_BARRIER_ISH
+#  else
+#    define _Py_atomic_thread_fence(order) _mm_mfence()
+#  endif
+#endif
+
 typedef struct _gc_runtime_state GCState;
 
 /* Out-of-process discovery anchor (see Include/internal/pycore_gc_stats.h).
