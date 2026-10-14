@@ -806,19 +806,30 @@ def _is_type(annotation, cls, a_module, a_type, is_type_predicate):
 
     match = _MODULE_IDENTIFIER_RE.match(annotation)
     if match:
-        ns = None
+        ns_module = None
         module_name = match.group(1)
         if not module_name:
             # No module name, assume the class's module did
             # "from dataclasses import InitVar".
-            ns = sys.modules.get(cls.__module__).__dict__
+            ns_module = sys.modules.get(cls.__module__)
         else:
-            # Look up module_name in the class's module.
+            # Look up module_name in the class's module. Resolve it through
+            # getattr so a lazy import is reified; treat an unresolvable lazy
+            # import like a missing name, as annotationlib does (gh-158936).
             module = sys.modules.get(cls.__module__)
-            if module and module.__dict__.get(module_name) is a_module:
-                ns = sys.modules.get(a_type.__module__).__dict__
-        if ns and is_type_predicate(ns.get(match.group(2)), a_module):
-            return True
+            try:
+                named = getattr(module, module_name, None)
+            except Exception:
+                named = None
+            if named is a_module:
+                ns_module = sys.modules.get(a_type.__module__)
+        if ns_module is not None:
+            try:
+                candidate = getattr(ns_module, match.group(2), None)
+            except Exception:
+                candidate = None
+            if is_type_predicate(candidate, a_module):
+                return True
     return False
 
 
