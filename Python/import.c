@@ -396,7 +396,11 @@ _PyImport_ClearLazyModules(PyInterpreterState *interp)
 int
 _PyImport_DiscardLazyModule(PyInterpreterState *interp, PyObject *name)
 {
-    return PySet_Discard(LAZY_MODULES(interp), name);
+    _PyLazyImportsState *lazy = _PyImport_GetLazyState(interp);
+    if (lazy == NULL || lazy->modules == NULL) {
+        return 0;
+    }
+    return PySet_Discard(lazy->modules, name);
 }
 
 // Return whether the cached module was still initializing.
@@ -4201,7 +4205,14 @@ lazy_modules_add(PyThreadState *tstate, PyObject *name,
     else {
         Py_XDECREF(mod);
     }
-    return loaded ? 0 : PySet_Add(LAZY_MODULES(tstate->interp), name);
+    if (loaded) {
+        return 0;
+    }
+    _PyLazyImportsState *lazy = _PyImport_GetLazyState(tstate->interp);
+    if (lazy == NULL || lazy->modules == NULL) {
+        return 0;
+    }
+    return PySet_Add(lazy->modules, name);
 }
 
 // Ensure a dict of pending submodule names exists for the parent.
@@ -4233,9 +4244,15 @@ ensure_lazy_pending_submodules(PyDictObject *lazy_modules, PyObject *parent)
 static int
 register_lazy_on_parent(PyThreadState *tstate, PyObject *name, PyObject *source)
 {
-    PyDictObject *pending =
-        (PyDictObject *)LAZY_PENDING_SUBMODULES(tstate->interp);
-    assert(pending != NULL);
+    _PyLazyImportsState *lazy = _PyImport_GetLazyState(tstate->interp);
+    // Finalizers can still run after finalize_modules() cleared the state.
+    if (lazy == NULL) {
+        return 0;
+    }
+    PyDictObject *pending = (PyDictObject *)lazy->pending_submodules;
+    if (pending == NULL) {
+        return 0;
+    }
     Py_ssize_t end = PyUnicode_GET_LENGTH(name);
     while (true) {
         Py_ssize_t dot = PyUnicode_FindChar(name, '.', 0, end, -1);
@@ -5592,7 +5609,7 @@ _imp__set_lazy_attributes_impl(PyObject *module, PyObject *modobj,
 /*[clinic end generated code: output=3369bb3242b1f043 input=900339e013ab2b82]*/
 {
     PyInterpreterState *interp = _PyInterpreterState_GET();
-    if (PySet_Discard(LAZY_MODULES(interp), name) < 0) {
+    if (_PyImport_DiscardLazyModule(interp, name) < 0) {
         return NULL;
     }
     if (_PyImport_ClearLazySubmodule(_PyThreadState_GET(), name, 0) < 0) {
